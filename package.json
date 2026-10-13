@@ -1,6 +1,6 @@
 {
   "name": "@dot-bridge/core",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,8 @@
     "packages/dot-bridge-platform/test-fixture-acl.py",
     "provenance/extraction.json",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "packages/dot-bridge-platform/private-files.js"
   ],
   "scripts": {
     "check": "node scripts/check.js",

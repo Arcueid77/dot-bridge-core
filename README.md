@@ -9,7 +9,10 @@ runtime key is included in this package.
 Exports:
 
 - `@dot-bridge/core/transport`: the existing strict callback transport.
-- `@dot-bridge/core/platform`: private files, Windows native handles and mode locks.
+- `@dot-bridge/core/platform`: Windows native handles and mode locks.
+- `@dot-bridge/core/platform/private-files.js`: canonical descriptor-relative Linux
+  private file/database leases and the matching Windows branch, also used by
+  standalone deployment status and backup validation scripts.
 - `@dot-bridge/core/router`: registered-channel loopback MCP aggregation.
 
 The executable in each IM repository registers its trusted adapter in code. The

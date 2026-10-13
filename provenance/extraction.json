@@ -119,6 +119,13 @@
       "file": "packages/dot-bridge-transport/transport.js",
       "sha256": "6ab74d0fbe51e8554b9c8ae89d349252c0c84ab842cd04c0a9d623e2df53d642",
       "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-platform/private-files.js",
+      "sha256": "a2521c00b10f78da22706d4e8142ddfcec5138b503f12d419d664d237c94db83",
+      "source_sha256": "1811c81e3551d721b28ee5bb807a2fa18b2f0dd5c451c3fe01412fd4849715a5",
+      "source_body_sha256": "696135b02f3d24acee71b6284fdf12333ce127b447c7fc78231f4c9780e18486",
+      "adaptation": "Only the platform import changes when moving the original descriptor-relative private-file API into canonical core."
     }
   ]
 }
