@@ -1,0 +1,32 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
+import { windowsPrivateDirectory, windowsWritePrivateFile, windowsReadPrivateFile, windowsPrivateDatabase, windowsModeLock } from './index.js';
+
+test('native handles remain pinned in Node after the helper exits; database and mode lock close safely', { skip: process.platform !== 'win32' }, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'windows-node-synthetic-'));
+  let held, database, sqlite, release;
+  t.after(() => { try { release?.(); } finally { try { sqlite?.close(); } finally { try { database?.close(); } finally { held?.close(); } } } });
+  t.after(() => { try { fs.rmSync(root, { recursive: true }); } catch {} });
+    const directory = path.join(root, 'private');
+    held = windowsPrivateDirectory(directory, { create: true });
+    assert.throws(() => fs.renameSync(directory, path.join(root, 'moved')));
+    const file = path.join(directory, 'fixture');
+    windowsWritePrivateFile(file, Buffer.from('synthetic-only'));
+    assert.equal(windowsReadPrivateFile(file).toString(), 'synthetic-only');
+    assert.throws(() => windowsWritePrivateFile(file, Buffer.from('must-not-overwrite')));
+    held.close(); held.close();
+    database = windowsPrivateDatabase(path.join(directory, 'fixture.sqlite'), { create: true });
+    sqlite = new DatabaseSync(database.path);
+    sqlite.exec('PRAGMA journal_mode=WAL; CREATE TABLE fixture(id INTEGER); INSERT INTO fixture VALUES (1)');
+    assert.throws(() => fs.renameSync(directory, path.join(root, 'moved')));
+    sqlite.close(); sqlite = undefined; database.close(); database.close();
+    release = windowsModeLock(directory, 'fixture.lock', { nonce: 'synthetic', mode: 'tunnel' });
+    assert.throws(() => windowsModeLock(directory, 'fixture.lock', { nonce: 'other', mode: 'sites' }));
+    assert.throws(() => fs.renameSync(path.join(directory, 'fixture.lock'), path.join(directory, 'replacement')));
+    release(); release();
+    assert.equal(fs.existsSync(path.join(directory, 'fixture.lock')), false);
+});

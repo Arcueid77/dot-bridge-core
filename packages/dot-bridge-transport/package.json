@@ -1,0 +1,26 @@
+{
+  "name": "@dot-bridge/callback-transport",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./index.js",
+    "./owner-message-experiment": "./experimental/owner-message.js",
+    "./owner-scoped-proxy": "./owner-scoped.js"
+  },
+  "files": [
+    "index.js",
+    "status.js",
+    "transport.js",
+    "README.md",
+    "experimental/owner-message.js",
+    "candidate/node-proxy-connection.js",
+    "owner-scoped.js"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

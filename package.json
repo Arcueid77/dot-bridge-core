@@ -1,0 +1,40 @@
+{
+  "name": "@dot-bridge/core",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Provider-independent secure transport, private platform primitives and registered-channel MCP router",
+  "engines": {
+    "node": ">=24.15 <25"
+  },
+  "exports": {
+    "./platform": "./packages/dot-bridge-platform/index.js",
+    "./platform/*": "./packages/dot-bridge-platform/*",
+    "./transport": "./packages/dot-bridge-transport/index.js",
+    "./transport/*": "./packages/dot-bridge-transport/*",
+    "./router": "./router/index.js",
+    "./router/*": "./router/*"
+  },
+  "files": [
+    "router/",
+    "packages/dot-bridge-transport/index.js",
+    "packages/dot-bridge-transport/status.js",
+    "packages/dot-bridge-transport/transport.js",
+    "packages/dot-bridge-transport/owner-scoped.js",
+    "packages/dot-bridge-transport/experimental/owner-message.js",
+    "packages/dot-bridge-transport/candidate/node-proxy-connection.js",
+    "packages/dot-bridge-platform/index.js",
+    "packages/dot-bridge-platform/windows.py",
+    "packages/dot-bridge-platform/supervised-stop.js",
+    "packages/dot-bridge-platform/test-fixtures.js",
+    "packages/dot-bridge-platform/test-fixture-acl.py",
+    "provenance/extraction.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "node scripts/check.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js packages/dot-bridge-transport/test/*.test.js"
+  }
+}

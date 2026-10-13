@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "source_repository": "https://github.com/AvaloNero/dot-qq-bridge",
+  "source_revision": "07e8fa9c5fb6090170d3db7890c4a1de7e103c26",
+  "files": [
+    {
+      "file": "packages/dot-bridge-platform/index.js",
+      "sha256": "db39248779cd054af26a14d7ba258c2dc4a4d9c22db1d290994fbd990d4f748d",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-platform/package.json",
+      "sha256": "ff34de1a0dfac114e1dc7002144616e4c3d8a53f845cb1af5fd49b2a686422f7",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-platform/README.md",
+      "sha256": "0ccb321100251c6695df0056fcf5ba731d0db045adfbece665f7c686921af9b5",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-platform/supervised-stop.js",
+      "sha256": "eb142c919380d4d27eff5e833b81c182911c9cbcb3a6b6dbe7319ff46d81ac78",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-platform/test-fixture-acl.py",
+      "sha256": "07a8a7c5c04ad84abf89d6bcbc42918616f6110a25604a1254da7186fd247d60",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-platform/test-fixtures.js",
+      "sha256": "972522e1d0f1c1d50b51172d293841d8b7e95d1a83982deb9f2ad370c74bcd79",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-platform/test-node.mjs",
+      "sha256": "18362b735d787e9aa4cda3cfd736ed425db514c08b56c3eb0cea2650c6e59fbe",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-platform/test_foreign_owner.py",
+      "sha256": "e64967b788a5b9f991541472ca0aca67e9cb576d6fbf6b8fe37fb4982f589cec",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-platform/test_windows.py",
+      "sha256": "13fb30aafcbe7c6fe2c282e51547a8d9b3b2f6b0ddd9a765f1168a89cc136d2d",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-platform/windows.py",
+      "sha256": "f414f88c0e9587736af7f7bdec1346af6e874789514fde002326e1185da45285",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-transport/candidate/node-proxy-connection.js",
+      "sha256": "5abebaeab545621108f393b4ed3d33e9b3de9ae2c69312530a5d27472d9c407f",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-transport/experimental/owner-message.js",
+      "sha256": "bd2a25e4d6f65234df3f6a4c71b30b808c9159fdba8fb5e961f90f47803358bf",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-transport/index.js",
+      "sha256": "12f74f7a1016c3f4ea735111a80b3f5dc72d590374cf14c4c3a70d5243673df1",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-transport/owner-scoped.js",
+      "sha256": "1c6de21807433a5c4355cd0e4e539d089bfecc81a437e6b41ca9b9e149d7a39a",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-transport/package.json",
+      "sha256": "77623df9fc5c3b144ee5cc6f69e9f353d365177ed346e82ff5eca4d45b53e466",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-transport/README.md",
+      "sha256": "612df213e9567bfa469574299354e5a29ab79094abd65e30ad280e7f7a17a970",
+      "adaptation": "Distribution and verification documentation only; shared runtime source unchanged.",
+      "source_sha256": "c54046337e61bb2542660fe8337409ff77f5a74482121fbfad56c5999497a2ae"
+    },
+    {
+      "file": "packages/dot-bridge-transport/status.js",
+      "sha256": "80de2c03bab9f8308186ae7203c2013e591f88ee3fcf5531ac36f71d2a965e3d",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-transport/test/contract.test.js",
+      "sha256": "8c9139083e146c345a8a0cbcb7ec7e876a0308fcc120eabee63cf51c6b6207a4",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-transport/test/native-proxy.test.js",
+      "sha256": "22589066cff2f90a55f145d8de54bb35573b76b63b1bc0890f9af942b0cfff1e",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-transport/test/network-safety.test.js",
+      "sha256": "bc3cac2580d370e5261182d928a6b0976204367d936a95407c701447faab2bf7",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-transport/test/owner-message.test.js",
+      "sha256": "c6c3378cb49f6c2e621ff07fa2dd901d851d1208057df89bfca50ce583100e03",
+      "adaptation": "Moved one actual QQ/Lark projection integration test to the QQ adapter regression suite; transport runtime unchanged.",
+      "source_sha256": "0e8fe3194a220316b3898f90f81300532911b3b97e327ccd239651b1d45873fd"
+    },
+    {
+      "file": "packages/dot-bridge-transport/test/owner-scoped.test.js",
+      "sha256": "452a464e8f80cabac8f955919044ee172607b2c9b337c442f8e62112102fd6bf",
+      "adaptation": null
+    },
+    {
+      "file": "packages/dot-bridge-transport/transport.js",
+      "sha256": "6ab74d0fbe51e8554b9c8ae89d349252c0c84ab842cd04c0a9d623e2df53d642",
+      "adaptation": null
+    }
+  ]
+}
