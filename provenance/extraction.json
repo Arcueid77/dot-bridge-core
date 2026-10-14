@@ -127,5 +127,6 @@
       "source_body_sha256": "696135b02f3d24acee71b6284fdf12333ce127b447c7fc78231f4c9780e18486",
       "adaptation": "Only the platform import changes when moving the original descriptor-relative private-file API into canonical core."
     }
-  ]
+  ],
+  "hash_policy": "utf8-lf"
 }
