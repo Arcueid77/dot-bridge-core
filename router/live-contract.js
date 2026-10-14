@@ -14,7 +14,8 @@ export function validateToolCall(config,params){
   const match=Object.entries(config.channels).find(([,route])=>route.adapter.readinessTool.name===params.name||route.adapter.liveTools.some(t=>t.name===params.name));
   if(!match)throw forbidden();const [channel,{adapter}]=match,live=enabled(config,channel);
   if(!live&&params.name!==adapter.readinessTool.name)throw forbidden();
-  return {channel,name:params.name,arguments:adapter.validateToolArguments(params.name,params.arguments,live)};
+  let args;try{args=adapter.validateToolArguments(params.name,params.arguments,live);}catch{throw new BridgeError('Invalid channel tool arguments');}
+  return {channel,name:params.name,arguments:args};
 }
 export function validateEventCall(config,method,params){
   if(config.operation!=='live'||!['events/subscribe','events/unsubscribe'].includes(method))throw forbidden();

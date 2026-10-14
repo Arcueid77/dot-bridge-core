@@ -39,6 +39,10 @@ test('configuration is a frozen snapshot and cannot add channels, scopes or larg
  assert.deepEqual(f.config.channels.fixture.adapter.scopes,['owner']);assert.equal(f.config.channels.fixture.adapter.liveTools.length,1);assert.equal(f.config.channels.fixture.adapter.limits.request,32768);
  assert.ok(Object.isFrozen(f.config.channels.fixture.adapter.event.payloadSchema));
 });
+test('adapter validation exceptions are normalized across separately installed core copies',t=>{
+ const a=adapter();a.validateToolArguments=()=>{throw Object.assign(new Error('synthetic-private-canary'),{status:500,code:-32015});};const f=fixture(t,[a]);
+ assert.throws(()=>validateToolCall(f.config,{name:'reply_fixture',arguments:{}}),e=>e.status===400&&e.code===-32602&&!e.message.includes('canary'));
+});
 test('adapter registration rejects collisions and oversized budgets',()=>{
  assert.throws(()=>registerAdapters([adapter(),adapter()]));const a=adapter('other','OTHER',8787);a.liveTools[0].name='reply_fixture';assert.throws(()=>registerAdapters([adapter(),a]));
  assert.throws(()=>registerAdapters([{...adapter(),limits:{...adapter().limits,response:12582913}}]));
