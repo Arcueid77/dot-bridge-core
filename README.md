@@ -59,6 +59,12 @@ model and parent directories root-owned and not writable by the service user.
 The backend environment selects them with `DOT_BRIDGE_AUDIO_TRANSCRIPTION=local-whisper`,
 `DOT_BRIDGE_WHISPER_BINARY=/protected/runtime/whisper-cli` and
 `DOT_BRIDGE_WHISPER_MODEL=/protected/runtime/ggml-base.bin`.
+Build the included `audio/no-core-dump.c` with
+`cc -shared -fPIC -O2 -o /protected/runtime/no-core-dump.so audio/no-core-dump.c`
+and set `DOT_BRIDGE_AUDIO_GUARD=/protected/runtime/no-core-dump.so`. It must have
+the same root-owned protection. This constructor makes each audio subprocess
+nondumpable after exec; a zero core-size limit alone is insufficient on systems
+with piped crash collectors. Missing protection makes transcription unavailable.
 Use the existing private `BRIDGE_LOCK_DIRECTORY` for both backends; one
 nonblocking lock serializes recognition across them. FFmpeg, prlimit and flock
 must be installed under `/usr/bin`. No API key or external transcription

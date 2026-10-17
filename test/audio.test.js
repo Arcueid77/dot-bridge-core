@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createAudioTranscriber} from '../audio/transcription.js';
- const env={DOT_BRIDGE_AUDIO_TRANSCRIPTION:'local-whisper'},tools={ffmpeg:'/trusted/ffmpeg',prlimit:'/trusted/prlimit',flock:'/trusted/flock',binary:'/trusted/whisper',model:'/trusted/model'};
+const env={DOT_BRIDGE_AUDIO_TRANSCRIPTION:'local-whisper'},tools={ffmpeg:'/trusted/ffmpeg',prlimit:'/trusted/prlimit',flock:'/trusted/flock',binary:'/trusted/whisper',model:'/trusted/model',guard:'/trusted/no-core-dump.so'};
 const pcm=()=>{const b=Buffer.alloc(3200);for(let i=0;i<b.length;i+=2)b.writeInt16LE(200,i);return b;};
 function fixture(overrides={}){const calls=[],buffers=[];let closed=0;
  const execute=async(command,args,input,options)=>{calls.push({command,args,options});const result=command===tools.prlimit?pcm():Buffer.from('合成语音转写');buffers.push(result);return result;};
@@ -13,6 +13,7 @@ test('voice transcription uses only protected local processes, bounded pipes and
  assert.deepEqual(result,{extracted_text:'合成语音转写',extraction_status:'complete'});assert.ok(checks>=4);
  assert.equal(f.calls.length,2);assert.ok(f.calls[0].args.includes('pipe'));assert.ok(f.calls[1].args.includes('/proc/self/fd/3'));
  assert.ok(f.calls[1].args.includes('--no-fork'));assert.equal(f.calls[1].options.fd,9);assert.equal(f.closed(),1);
+ assert.ok(f.calls.every(call=>call.args.includes('--core=0')&&call.options.guard===tools.guard));
  assert.ok(f.buffers.every(b=>b.every(value=>value===0)));
 });
 test('transcription is opt-in, Linux-only, size bounded and never opens a runtime when disabled',async()=>{
