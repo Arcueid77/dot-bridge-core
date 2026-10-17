@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createAudioTranscriber} from '../audio/transcription.js';
-const env={DOT_BRIDGE_AUDIO_TRANSCRIPTION:'local-whisper'},tools={ffmpeg:'/trusted/ffmpeg',prlimit:'/trusted/prlimit',flock:'/trusted/flock',nice:'/trusted/nice',binary:'/trusted/whisper',model:'/trusted/model'};
+ const env={DOT_BRIDGE_AUDIO_TRANSCRIPTION:'local-whisper'},tools={ffmpeg:'/trusted/ffmpeg',prlimit:'/trusted/prlimit',flock:'/trusted/flock',binary:'/trusted/whisper',model:'/trusted/model'};
 const pcm=()=>{const b=Buffer.alloc(3200);for(let i=0;i<b.length;i+=2)b.writeInt16LE(200,i);return b;};
 function fixture(overrides={}){const calls=[],buffers=[];let closed=0;
  const execute=async(command,args,input,options)=>{calls.push({command,args,options});const result=command===tools.prlimit?pcm():Buffer.from('合成语音转写');buffers.push(result);return result;};

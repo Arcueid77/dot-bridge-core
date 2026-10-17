@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
+import {setPriority} from 'node:os';
 
 const INPUT_LIMIT=8*1024*1024, PCM_LIMIT=16000*2*120, TEXT_LIMIT=12000;
 const unavailable=()=>({extraction_status:'unsupported'});
@@ -17,7 +18,7 @@ function trustedFile(file){
   return file;
 }
 function runtime(env){
-  return {ffmpeg:trustedFile('/usr/bin/ffmpeg'),prlimit:trustedFile('/usr/bin/prlimit'),flock:trustedFile('/usr/bin/flock'),nice:trustedFile('/usr/bin/nice'),
+  return {ffmpeg:trustedFile('/usr/bin/ffmpeg'),prlimit:trustedFile('/usr/bin/prlimit'),flock:trustedFile('/usr/bin/flock'),
     binary:trustedFile(env.DOT_BRIDGE_WHISPER_BINARY),model:trustedFile(env.DOT_BRIDGE_WHISPER_MODEL)};
 }
 function lockFile(env){
@@ -36,7 +37,8 @@ function run(command,args,input,{limit,timeout,fd}){
     const stop=()=>{failed=true;child?.kill('SIGKILL');};
     const timer=setTimeout(stop,timeout);
     try{
-      child=spawn(command,args,{shell:false,windowsHide:true,stdio:['pipe','pipe','pipe',...(fd===undefined?[]:[fd])],env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8',OMP_NUM_THREADS:'1',OPENBLAS_NUM_THREADS:'1'}});
+      child=spawn(command,args,{shell:false,windowsHide:true,cwd:'/',stdio:['pipe','pipe','pipe',...(fd===undefined?[]:[fd])],env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8',OMP_NUM_THREADS:'1',OPENBLAS_NUM_THREADS:'1'}});
+      try{if(child.pid)setPriority(child.pid,10);}catch{/* CPU and memory limits still apply. */}
       child.stdout.on('data',chunk=>{size+=chunk.length;if(size>limit){chunk.fill(0);stop();}else chunks.push(chunk);});
       child.stderr.on('data',chunk=>chunk.fill(0));child.stdin.on('error',()=>{});
       child.once('error',()=>{failed=true;});
@@ -67,13 +69,15 @@ export function createAudioTranscriber({env=process.env,platform=process.platfor
     try{
       const tools=validate(env);guard=lock(env);authorize();
       const budget=max=>{const remaining=Math.min(max,deadline-Date.now());if(remaining<1000)throw Error();return remaining;};
-      pcm=await execute(tools.prlimit,['--as=536870912','--cpu=6','--fsize=0','--',tools.ffmpeg,'-nostdin','-hide_banner','-loglevel','error','-protocol_whitelist','pipe','-i','pipe:0','-t','121','-vn','-map_metadata','-1','-threads','1','-ar','16000','-ac','1','-c:a','pcm_s16le','-f','s16le','pipe:1'],bytes,{limit:PCM_LIMIT+32000,timeout:budget(6000)});
+      pcm=await execute(tools.prlimit,['--as=536870912','--cpu=6','--core=0','--fsize=0','--',tools.ffmpeg,'-nostdin','-hide_banner','-loglevel','error','-protocol_whitelist','pipe','-i','pipe:0','-t','121','-vn','-map_metadata','-1','-threads','1','-ar','16000','-ac','1','-c:a','pcm_s16le','-f','s16le','pipe:1'],bytes,{limit:PCM_LIMIT+32000,timeout:budget(6000)});
       if(!pcm.length||pcm.length>PCM_LIMIT||pcm.length%2)throw Error();
       // Avoid transcribing digital silence into a hallucinated sentence.
       let energy=0;for(let i=0;i<pcm.length;i+=2){const sample=pcm.readInt16LE(i);energy+=sample*sample;}
       if(Math.sqrt(energy/(pcm.length/2))<10)return unavailable();
       wav=wave(pcm);authorize();
-      output=await execute(tools.flock,['--no-fork','--nonblock','/proc/self/fd/3',tools.nice,'-n','10',tools.prlimit,'--as=805306368','--cpu=28','--fsize=0','--',tools.binary,'--model',tools.model,'--file','-','--language','auto','--threads','1','--no-prints','--no-timestamps'],wav,{limit:TEXT_LIMIT*4,timeout:budget(28000),fd:guard.fd});
+      // An explicit unused output basename keeps the CLI's stdout transcript
+      // callback enabled for stdin input; no output-file format is requested.
+      output=await execute(tools.flock,['--no-fork','--nonblock','/proc/self/fd/3',tools.prlimit,'--as=1610612736','--cpu=28','--core=0','--fsize=0','--',tools.binary,'--model',tools.model,'--file','-','--output-file','/dev/null','--language','auto','--threads','1','--no-prints','--no-timestamps'],wav,{limit:TEXT_LIMIT*4,timeout:budget(28000),fd:guard.fd});
       authorize();
       const text=new TextDecoder('utf-8',{fatal:true}).decode(output).trim();
       if(!text||text.length>TEXT_LIMIT||/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]|\p{Surrogate}/u.test(text))return unavailable();

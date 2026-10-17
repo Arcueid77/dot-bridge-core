@@ -60,12 +60,12 @@ The backend environment selects them with `DOT_BRIDGE_AUDIO_TRANSCRIPTION=local-
 `DOT_BRIDGE_WHISPER_BINARY=/protected/runtime/whisper-cli` and
 `DOT_BRIDGE_WHISPER_MODEL=/protected/runtime/ggml-base.bin`.
 Use the existing private `BRIDGE_LOCK_DIRECTORY` for both backends; one
-nonblocking lock serializes recognition across them. FFmpeg, prlimit, flock and
-nice must be installed under `/usr/bin`. No API key or external transcription
+nonblocking lock serializes recognition across them. FFmpeg, prlimit and flock
+must be installed under `/usr/bin`. No API key or external transcription
 service is used. The host's original dot still generates the response.
 
 Audio travels through bounded memory pipes, never a temporary media file.
-Recognition uses one CPU thread, an address-space ceiling of 768 MiB and at most
+Recognition uses one CPU thread, a virtual address-space ceiling of 1.5 GiB and at most
 28 seconds of wall time. Input is limited to 8 MiB and 120 seconds; decoded
 silence, busy/absent runtimes, unsupported formats and timeouts return
 `extraction_status:unsupported`. The bridge keeps the native audio result and
