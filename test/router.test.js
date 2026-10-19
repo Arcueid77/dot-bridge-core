@@ -11,6 +11,7 @@ import {toolCatalog,eventCatalog} from '../router/catalog.js';
 import {validateEventCall,validateToolCall} from '../router/live-contract.js';
 import {OWNER,VERSION,SERVICE_HEADER,metadata,object} from '../router/common.js';
 import {privateMkdtempSync,cleanupPrivateFixture,beforeFixtureCleanup} from '../packages/dot-bridge-platform/test-fixtures.js';
+import {windowsWritePrivateFile} from '../packages/dot-bridge-platform/index.js';
 const inputSchema={type:'object',properties:{},additionalProperties:false};
 const annotations={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false};
 function adapter(id='fixture',envPrefix='FIXTURE',defaultPort=8788){
@@ -24,7 +25,7 @@ function adapter(id='fixture',envPrefix='FIXTURE',defaultPort=8788){
 function fixture(t,descriptors=[adapter()]){
  const directory=privateMkdtempSync(path.join(os.tmpdir(),'core-router-test-'));cleanupPrivateFixture(t,directory);
  const keys=[101,102,103].map(n=>Buffer.alloc(32,n).toString('base64url'));
- const files=keys.map((key,i)=>{const file=path.join(directory,`key-${i}`);fs.writeFileSync(file,key,{mode:0o600});return file;});
+ const files=keys.map((key,i)=>{const file=path.join(directory,`key-${i}`);if(process.platform==='win32')windowsWritePrivateFile(file,Buffer.from(key));else fs.writeFileSync(file,key,{mode:0o600});return file;});
  const env={AUTH_MODE:'tunnel-service',BRIDGE_MODE:'tunnel',TUNNEL_SERVICE_OWNER_ID:OWNER,TUNNEL_SERVICE_KEY_FILE:files[0],TUNNEL_SERVICE_OPERATION:'live',TUNNEL_LIVE_CHANNELS:descriptors.map(a=>a.id).join(',')};
  descriptors.forEach((a,i)=>{env[`${a.envPrefix}_SERVICE_KEY_FILE`]=files[i+1];});
  return {directory,keys,files,env,config:readConfig(env,descriptors)};
