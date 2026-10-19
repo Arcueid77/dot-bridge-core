@@ -16,6 +16,24 @@ Exports:
 - `@dot-bridge/core/router`: registered-channel loopback MCP aggregation.
 - `@dot-bridge/core/audio`: optional local speech transcription for hosts that
   cannot consume native MCP audio.
+- `@dot-bridge/core/channels`: shared runtime for new independent IM providers:
+  owner-bound MCP tools/events, encrypted SQLite inbox and outbox, callback
+  verification, service authentication and graceful process lifecycle.
+
+The new channel runtime accepts messages only from the configured owner private
+chat. It persists polling state and queues before acknowledging messages, and
+keeps uncertain callback/reply attempts without automatically resending them.
+Each channel supplies only its platform protocol implementation, following the
+[provider contract](docs/channel-provider-contract.md). Binary media is not part
+of this initial channel contract; existing Lark/QQ media support is unchanged.
+
+Subscriptions expire after at most seven days. The original dot must renew them
+before the returned `refreshBefore`; the bridge cannot independently renew a
+host-owned subscription. An inactive subscription pauses callback and reply
+delivery. Pending messages remain available until their reply deadline.
+
+Message records are logically removed after seven days. SQLite pages, WAL,
+backups and system logs may retain old bytes; this policy is not physical erasure.
 
 The executable in each IM repository registers its trusted adapter in code. The
 adapter owns tool/event schemas, argument and result projection, capabilities,

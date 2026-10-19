@@ -1,6 +1,6 @@
 {
   "name": "@dot-bridge/core",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -9,6 +9,8 @@
     "node": ">=24.15 <25"
   },
   "exports": {
+    "./channels": "./channels/index.js",
+    "./channels/*": "./channels/*",
     "./audio": "./audio/transcription.js",
     "./platform": "./packages/dot-bridge-platform/index.js",
     "./platform/*": "./packages/dot-bridge-platform/*",
@@ -18,6 +20,8 @@
     "./router/*": "./router/*"
   },
   "files": [
+    "channels/",
+    "docs/channel-provider-contract.md",
     "audio/",
     "router/",
     "packages/dot-bridge-transport/index.js",

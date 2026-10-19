@@ -1,0 +1,32 @@
+name: Check component
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24.21.0'
+          cache: npm
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Select installed Python for Windows private-file checks
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bridgePython = Join-Path $env:pythonLocation 'python.exe'
+          "DOT_BRIDGE_PYTHON=$bridgePython" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "C:\Program Files\Git\usr\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+      - run: npm run check
+      - run: npm test

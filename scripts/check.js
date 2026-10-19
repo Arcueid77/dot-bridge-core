@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
-const files=['audio','router','scripts','test','packages'].flatMap(root=>fs.readdirSync(root,{recursive:true}).filter(f=>f.endsWith('.js')||f.endsWith('.mjs')).map(f=>path.join(root,f)));
+const files=['audio','channels','router','scripts','test','packages'].flatMap(root=>fs.readdirSync(root,{recursive:true}).filter(f=>f.endsWith('.js')||f.endsWith('.mjs')).map(f=>path.join(root,f)));
 for(const file of files){const r=spawnSync(process.execPath,['--check',file],{encoding:'utf8'});if(r.status!==0){process.stderr.write(r.stderr);process.exit(1);}}
 const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));
 if(pkg.dependencies||pkg.devDependencies)throw Error('Core must not depend on provider SDKs');
