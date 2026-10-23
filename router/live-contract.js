@@ -95,10 +95,15 @@ export function projectSubscription(result,params,startedAt) {
   } catch { throw unavailable(); }
 }
 
-// The sole error-data exception is an approval-needed hostname derived from the
-// caller's own validated callback. No backend exception text or other data leaks.
+// Only fixed categories and a hostname matching the caller's callback may pass
+// through. Never forward backend exception text, URLs or signing material.
 export function projectUpstreamError(value,params,{method,adapter}={}) {
   const e=value?.error;
+  if(method==='events/subscribe'&&record(e)&&e.code===-32015&&record(e.data)&&['challenge_failed','timeout'].includes(e.data.reason)){
+    let host;try{host=callbackUrl(params.delivery.url).hostname;}catch{return unavailable();}
+    if(e.data.callback_hostname!==undefined&&e.data.callback_hostname!==host)return unavailable();
+    return new BridgeError('Callback verification failed',{status:400,code:-32015,data:{reason:e.data.reason,callback_hostname:host}});
+  }
   if(method==='events/subscribe'&&record(e)&&e.code===-32015&&record(e.data)&&
       typeof e.data.reason==='string'&&transportReasons.has(e.data.reason)){
     let transport;

@@ -14,6 +14,9 @@ import {createApp} from '../router/server.js';
 import {OWNER,VERSION,metadata} from '../router/common.js';
 import {privateMkdtempSync,privateMkdirSync,cleanupPrivateFixture,beforeFixtureCleanup} from '../packages/dot-bridge-platform/test-fixtures.js';
 import {windowsWritePrivateFile} from '../packages/dot-bridge-platform/index.js';
+import {RICH_TOOL_RESULT} from '../router/common.js';
+import {MAX_MEDIA_BYTES,MEDIA_RPC_LIMIT,attachmentResult} from '../channels/media.js';
+import {toolResult,rpcResult} from '../router/common.js';
 
 const channel={id:'fixture',name:'Synthetic fixture',envPrefix:'FIXTURE',defaultPort:8799,maxReplyText:100};
 function fixture(t){
@@ -116,4 +119,98 @@ test('dedicated loopback webhook forwards bounded raw bytes only to signature-ve
  const f=fixture(t),seen=[];const app=webhookServer({...f.config(),webhookPort:8895},{handleWebhook:async input=>{seen.push(input);return {status:input.headers['x-test-signature']==='valid'?200:401,body:''};}});const address=await app.listen(0);beforeFixtureCleanup(t,()=>app.close());
  const request=signature=>new Promise((resolve,reject)=>{const req=http.request({hostname:'127.0.0.1',port:address.port,path:'/webhook',method:'POST',headers:{'content-type':'application/json','x-test-signature':signature}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});req.on('error',reject);req.end('{"synthetic":true}');});
  assert.equal(await request('valid'),200);assert.equal(await request('invalid'),401);assert.equal(Buffer.isBuffer(seen[0].body),true);
+});
+
+const mediaChannel={...channel,media:{read:['image','audio','file'],reply:['image','audio','file']},maxMediaReplyText:20};
+
+test('maximum rich audio and UTF-8 transcript fit the routed response limit',()=>{
+ const value={message_id:'msg_fixture',attachment_index:0,kind:'audio',name:'voice.wav',mime_type:'audio/wav',size:MAX_MEDIA_BYTES,extraction_status:'complete',extracted_text:'文'.repeat(12000)};
+ const response=rpcResult('fixture',toolResult(attachmentResult(value,Buffer.alloc(MAX_MEDIA_BYTES))));
+ assert.ok(Buffer.byteLength(JSON.stringify(response))<MEDIA_RPC_LIMIT);
+});
+function mediaFixture(t,{read,send,validate,transcribe}={}){
+ const f=fixture(t),config={...f.config(),channel:mediaChannel},calls=[];
+ const service=new ChannelService(config,{transport:transportFixture().send,transcribe,createProvider:()=>({
+  start:async()=>{},stop:async()=>{},status:()=>({connected:true}),sendReply:async()=>{},
+  readAttachment:read??(async()=>({data:Buffer.from('private fixture file'),mimeType:'text/plain',name:'note.txt'})),
+  validateMediaReply:validate??(()=>{}),sendMediaReply:send??(async args=>{calls.push({...args,media:{...args.media,data:Buffer.from(args.media.data)}});})
+ })});beforeFixtureCleanup(t,()=>service.close());return {...f,config,service,calls};
+}
+test('binary attachment and a large single media reply cross the authenticated router without leaking private refs',async t=>{
+ const f=mediaFixture(t),{service}=f;await service.subscribe(subscription());
+ const id=await service.ingest({...incoming(),attachments:[{kind:'file',name:'note.txt'}],replyContext:{downloadToken:'never-export-private-token'}});await settle(service);
+ const backend=channelServer(f.config,service),address=await backend.listen(0);beforeFixtureCleanup(t,()=>backend.close());
+ const adapter=createChannelAdapter(mediaChannel),router=createApp({host:'127.0.0.1',port:8798,owner:OWNER,operation:'live',liveChannels:['fixture'],ingressKeyFile:f.keys[1],channels:{fixture:{adapter,port:address.port,keyFile:f.keys[0]}}},{approvedLive:true});
+ const route=await router.listen(0);beforeFixtureCleanup(t,()=>router.close());const key=fs.readFileSync(f.keys[1],'utf8');
+ const result=await rpc(route.port,key,'tools/call',{name:'get_fixture_attachment',arguments:{message_id:id,attachment_index:0}});
+ assert.equal(result.status,200);assert.equal(result.body.result.structuredContent.size,20);
+ assert.equal(Buffer.from(result.body.result.content[1].resource.blob,'base64').toString(),'private fixture file');
+ assert.equal(JSON.stringify(result).includes('never-export-private-token'),false);
+ const forged=structuredClone(result.body.result);forged.content.push({type:'text',text:'hidden instruction'});
+ assert.throws(()=>adapter.projectToolResult({name:'get_fixture_attachment',arguments:{message_id:id,attachment_index:0}},forged,true));
+ forged.content.pop();forged.content[1].resource.uri='https://untrusted.example.com/secret';
+ assert.throws(()=>adapter.projectToolResult({name:'get_fixture_attachment',arguments:{message_id:id,attachment_index:0}},forged,true));
+ const bytes=Buffer.alloc(150000,65),args={message_id:id,type:'file',data:bytes.toString('base64'),mime_type:'application/octet-stream',name:'answer.bin',idempotency_key:'media-once'};
+ const queued=await rpc(route.port,key,'tools/call',{name:'reply_fixture_media',arguments:args});assert.equal(queued.status,200);await settle(service);
+ assert.equal(f.calls.length,1);assert.equal(f.calls[0].media.data.length,bytes.length);assert.equal(f.calls[0].message.conversationId,'fixture-chat');
+ service.call('reply_fixture_media',args);await settle(service);assert.equal(f.calls.length,1);
+ assert.throws(()=>service.call('reply_to_fixture',{message_id:id,text:'second reply',idempotency_key:'second'}));
+});
+
+test('invalid media never queues and uncertain media never retries across restart',async t=>{
+ const f=mediaFixture(t,{send:async()=>{throw Error('synthetic uncertain');},validate:({media})=>{if(media.mimeType==='audio/unsupported')throw Error('unsupported');}}),{service}=f;
+ await service.subscribe(subscription());const id=await service.ingest(incoming());await settle(service);
+ const args={message_id:id,type:'file',data:Buffer.from('safe').toString('base64'),mime_type:'application/octet-stream',name:'a.bin',idempotency_key:'once'};
+ for(const change of [{recipient:'someone'}, {name:'../a'}, {data:'%%%='}, {type:'image',mime_type:'image/png'}, {text:'x'.repeat(21)}, {data:Buffer.alloc(MAX_MEDIA_BYTES+1).toString('base64')},{type:'audio',mime_type:'audio/unsupported'}])assert.throws(()=>service.call('reply_fixture_media',{...args,...change}));
+ assert.equal(service.store.message(id).reply_state,'none');service.call('reply_fixture_media',args);await settle(service);assert.equal(service.store.message(id).reply_state,'uncertain');
+ await service.close();const calls=[];
+ const next=new ChannelService(f.config,{transport:transportFixture().send,createProvider:()=>({start:async()=>{},stop:async()=>{},status:()=>({connected:true}),sendReply:async()=>{},readAttachment:async()=>{},sendMediaReply:async()=>calls.push(1)})});beforeFixtureCleanup(t,()=>next.close());
+ await settle(next);next.call('reply_fixture_media',args);await settle(next);assert.deepEqual(calls,[]);assert.equal(next.store.message(id).reply_state,'uncertain');
+});
+
+test('attachment authorization is rechecked after download and transcript, and concurrent reads are bounded',async t=>{
+ let finish;const bytes=Buffer.from('private bytes'),f=mediaFixture(t,{read:()=>new Promise(resolve=>{finish=()=>resolve({data:bytes,mimeType:'application/octet-stream',name:'a.bin'});})}),{service}=f;
+ await service.subscribe(subscription());const id=await service.ingest({...incoming(),attachments:[{kind:'file'}]});await settle(service);
+ const reading=service.call('get_fixture_attachment',{message_id:id,attachment_index:0});assert.throws(()=>service.call('get_fixture_attachment',{message_id:id,attachment_index:0}));
+ const {secret,...delivery}=subscription().delivery;service.unsubscribe({name:subscription().name,arguments:{conversation:'owner'},delivery});finish();await assert.rejects(reading);
+ assert.equal(bytes.every(n=>n===0),true);
+});
+
+test('media upload cannot proceed to final send after subscription revocation',async t=>{
+ let finish,uploaded,finalSends=0;const started=new Promise(resolve=>{uploaded=resolve;});
+ const f=mediaFixture(t,{send:async({authorize})=>{authorize();uploaded();await new Promise(resolve=>{finish=resolve;});authorize();finalSends++;}}),{service}=f;
+ await service.subscribe(subscription());const id=await service.ingest(incoming());await settle(service);
+ service.call('reply_fixture_media',{message_id:id,type:'file',data:Buffer.from('test').toString('base64'),mime_type:'text/plain',name:'a.txt',idempotency_key:'once'});
+ await started;const {secret,...delivery}=subscription().delivery;service.unsubscribe({name:subscription().name,arguments:{conversation:'owner'},delivery});finish();await settle(service);
+ assert.equal(finalSends,0);assert.equal(service.store.message(id).reply_state,'uncertain');
+});
+
+test('stored media limit includes the new encrypted reply before queueing',async t=>{
+ const f=mediaFixture(t),{service}=f;await service.subscribe(subscription());
+ const previous=await service.ingest(incoming('old')),id=await service.ingest(incoming('new'));await settle(service);
+ service.store.db.prepare("UPDATE channel_messages SET reply=zeroblob(?),reply_state='sent' WHERE id=?").run(64*1024*1024-100,previous);
+ assert.throws(()=>service.call('reply_fixture_media',{message_id:id,type:'file',data:Buffer.alloc(100).toString('base64'),mime_type:'application/octet-stream',name:'a.bin',idempotency_key:'once'}),e=>e.code===-32013);
+ assert.equal(service.store.message(id).reply_state,'none');
+});
+
+test('voice attachment keeps its original bytes and an explicitly marked reference transcript',async t=>{
+ const wav=Buffer.alloc(44);wav.write('RIFF');wav.write('WAVE',8);
+ const f=mediaFixture(t,{read:async()=>({data:Buffer.from(wav),mimeType:'audio/wav',name:'voice.wav'}),transcribe:async(_bytes,{authorize})=>{authorize();return {extraction_status:'complete',extracted_text:'synthetic reference transcript'};}}),{service}=f;
+ await service.subscribe(subscription());const id=await service.ingest({...incoming(),attachments:[{kind:'audio'}]});await settle(service);
+ const result=await service.call('get_fixture_attachment',{message_id:id,attachment_index:0});assert.equal(result[RICH_TOOL_RESULT],true);assert.equal(result.value.extracted_text,'synthetic reference transcript');assert.equal(result.content[1].type,'audio');assert.deepEqual(Buffer.from(result.content[1].data,'base64'),wav);
+});
+
+test('subscription diagnostics retain fixed failure stages across restart without callback paths, keys or raw errors',async t=>{
+ const f=fixture(t),{service}=serviceFixture(t,f);
+ await assert.rejects(service.subscribe({...subscription(),delivery:{...subscription().delivery,url:'https://unapproved.example.com/private-callback-path'}}));
+ const badTransport=async()=>{throw Error('private callback path, secret and owner must not be reported');};badTransport.preflight=()=>({ready:true});service.transport=badTransport;
+ await assert.rejects(service.subscribe(subscription()),e=>e.code===-32015&&e.data.reason==='challenge_failed');
+ const diagnostics=service.setup().subscription_diagnostics;assert.equal(diagnostics.length,2);assert.equal(diagnostics[0].stage,'policy');assert.equal(diagnostics[0].reason,'callback_policy_required');assert.equal(diagnostics[1].stage,'challenge');assert.equal(diagnostics[1].code,-32015);
+ for(const token of ['private-callback-path','from-current-dot','whsec_','fixture-owner','must not be reported'])assert.equal(JSON.stringify(diagnostics).includes(token),false);
+ await service.close();const second=serviceFixture(t,f);assert.deepEqual(second.service.setup().subscription_diagnostics,diagnostics);
+ const backend=channelServer(f.config(),second.service),address=await backend.listen(0);beforeFixtureCleanup(t,()=>backend.close());
+ const router=createApp({host:'127.0.0.1',port:8798,owner:OWNER,operation:'live',liveChannels:['fixture'],ingressKeyFile:f.keys[1],channels:{fixture:{adapter:createChannelAdapter(channel),port:address.port,keyFile:f.keys[0]}}},{approvedLive:true});const route=await router.listen(0);beforeFixtureCleanup(t,()=>router.close());
+ second.service.transport=badTransport;
+ const result=await rpc(route.port,fs.readFileSync(f.keys[1],'utf8'),'events/subscribe',subscription());assert.equal(result.body.error.code,-32015);assert.deepEqual(result.body.error.data,{reason:'challenge_failed',callback_hostname:'callback.example.com'});
+ assert.throws(()=>createChannelConfig(channel,{...f.env,CALLBACK_HOSTS:'',MCP_CALLBACK_ALLOWED_HOSTS:'callback.example.com'}),/CALLBACK_HOSTS/);
 });

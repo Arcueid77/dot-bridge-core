@@ -16,6 +16,10 @@ Exports:
 - `@dot-bridge/core/router`: registered-channel loopback MCP aggregation.
 - `@dot-bridge/core/audio`: optional local speech transcription for hosts that
   cannot consume native MCP audio.
+- `@dot-bridge/core/audio/silk.js`: isolated bounded SILK decoding and PCM WAV
+  encoding using a codec explicitly pinned by the provider.
+- `@dot-bridge/core/channels/pairing.js`: expiring owner pairing and private,
+  no-overwrite credential installation for dedicated enrollment commands.
 - `@dot-bridge/core/channels`: shared runtime for new independent IM providers:
   owner-bound MCP tools/events, encrypted SQLite inbox and outbox, callback
   verification, service authentication and graceful process lifecycle.
@@ -24,8 +28,10 @@ The new channel runtime accepts messages only from the configured owner private
 chat. It persists polling state and queues before acknowledging messages, and
 keeps uncertain callback/reply attempts without automatically resending them.
 Each channel supplies only its platform protocol implementation, following the
-[provider contract](docs/channel-provider-contract.md). Binary media is not part
-of this initial channel contract; existing Lark/QQ media support is unchanged.
+[provider contract](docs/channel-provider-contract.md). Media-capable providers
+expose bounded attachment reads and a single final text or media reply. Private
+download references remain encrypted, and authorization is checked again before
+each stage of a media send. Setup tools expose redacted subscription diagnostics.
 
 Subscriptions expire after at most seven days. The original dot must renew them
 before the returned `refreshBefore`; the bridge cannot independently renew a

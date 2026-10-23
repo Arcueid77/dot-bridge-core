@@ -3,6 +3,7 @@ import {BridgeError,VERSION,rpcResult} from '../router/common.js';
 import {checkHeaders} from '../router/server.js';
 import {validateMcp} from '../router/protocol.js';
 import {createAuthenticator,readServiceKey} from '../router/auth.js';
+import {MEDIA_RPC_LIMIT} from './media.js';
 
 const json=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store',connection:'close','x-content-type-options':'nosniff'});res.end(JSON.stringify(value));};
 async function body(req,max){
@@ -24,7 +25,8 @@ export function channelServer(config,service){
    if(req.method==='GET'&&req.url==='/healthz')return json(res,200,{status:'ok',channel:config.channel.id,mode:config.operation});
    if(req.url!=='/mcp'||req.method!=='POST')return json(res,404,{error:'Not found'});
    authenticate(req);if(Date.now()-window>=60000){window=Date.now();count=0;}if(inflight>=8||++count>120)throw new BridgeError('Request limit reached',{status:429,code:-32013});inflight++;acquired=true;
-   const request=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await body(req,131072))),params=validateMcp(request,req.headers);
+   const limit=service&&req.headers['mcp-name']===`reply_${config.channel.id}_media`?MEDIA_RPC_LIMIT:131072;
+   const request=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await body(req,limit))),params=validateMcp(request,req.headers);
    if(!Object.hasOwn(request,'id')){if(request.method!=='notifications/cancelled')throw new BridgeError('Unsupported notification');res.writeHead(202,{connection:'close'});res.end();return;}
    if(typeof request.id==='string'&&request.id.length>256)throw new BridgeError('Invalid request ID');id=request.id;
    let result;
@@ -39,7 +41,7 @@ export function channelServer(config,service){
    json(res,200,rpcResult(id,result));
   }catch(error){const safe=error instanceof BridgeError?error:new BridgeError('Channel request unavailable',{status:500,code:-32603});if(!res.headersSent&&!res.destroyed)json(res,safe.status,{jsonrpc:'2.0',id,error:{code:safe.code,message:safe.message,...(safe.data?{data:safe.data}:{})}});}
   finally{if(acquired)inflight--;}
- });return app;
+ });app.server.timeout=50000;return app;
 }
 export function webhookServer(config,provider){
  let inflight=0;

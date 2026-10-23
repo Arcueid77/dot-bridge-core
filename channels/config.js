@@ -28,6 +28,7 @@ export function createChannelConfig(channel,env=process.env){
  for(const directory of [path.dirname(dbPath),bridgeLockDirectory])openPrivateDirectory(directory).close();
  if(new Set([keyFile,credentialFile,env.STORAGE_KEY_FILE,dbPath]).size!==4)throw Error('Protected files must be distinct');
  const callbackHosts=(env.CALLBACK_HOSTS??'').split(',').map(s=>s.trim()).filter(Boolean);
+ if(!callbackHosts.length&&env.MCP_CALLBACK_ALLOWED_HOSTS)throw Error('Use CALLBACK_HOSTS for this channel; MCP_CALLBACK_ALLOWED_HOSTS is not read');
  if(callbackHosts.length>16||new Set(callbackHosts).size!==callbackHosts.length||callbackHosts.some(h=>!validHostname(h)))throw Error('Callback hosts must be exact DNS names');
  const maxReplyText=channel.maxReplyText??20000;
  if(!Number.isSafeInteger(maxReplyText)||maxReplyText<1||maxReplyText>20000)throw Error('Invalid channel text bound');
