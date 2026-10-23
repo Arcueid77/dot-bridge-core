@@ -17,6 +17,9 @@ function trustedFile(file){
   }
   return file;
 }
+// Media conversion uses the same executable/guard trust boundary as speech
+// recognition, including protected parents and refusal of aliases.
+export const assertTrustedRuntimeFile=trustedFile;
 function runtime(env){
   return {ffmpeg:trustedFile('/usr/bin/ffmpeg'),prlimit:trustedFile('/usr/bin/prlimit'),flock:trustedFile('/usr/bin/flock'),
     binary:trustedFile(env.DOT_BRIDGE_WHISPER_BINARY),model:trustedFile(env.DOT_BRIDGE_WHISPER_MODEL),guard:trustedFile(env.DOT_BRIDGE_AUDIO_GUARD)};
