@@ -5,6 +5,32 @@ import {MAX_MEDIA_BYTES,MEDIA_RPC_LIMIT,TUNNEL_ENVELOPE_BYTES} from './tunnel-bu
 
 const DIAGNOSTIC_KEY='status_subscription_diagnostics_v1';
 const DIAGNOSTIC_AAD='metadata:subscription-diagnostics:v1';
+const FEEDBACK_TERMINAL=new Set(['sent','dead','expired','uncertain','cancelled']);
+function activeFeedbackNeedsMutation(store,row,now,hasActiveSubscription) {
+  const message=store.get('SELECT expires FROM messages WHERE id=?',row.message_id);
+  if(!message)return false;
+  const reply=store.get("SELECT state FROM jobs WHERE id=? AND kind='reply'",`reply:${row.message_id}`);
+  const notice=!reply?store.get("SELECT state FROM jobs WHERE id=? AND kind='notice'",`notice:${row.message_id}`):undefined;
+  const stream=store.get('SELECT state,payload FROM reply_streams WHERE message_id=?',row.message_id);
+  const streamTerminal={uncertain:'uncertain',failed:'dead',cancelled:'cancelled',expired:'expired'};
+  const replyState=reply?.state??notice?.state??streamTerminal[stream?.state]??'none';
+  const event=store.get("SELECT state FROM jobs WHERE kind='event' AND message_id=?",row.message_id)?.state;
+  const interaction=store.config?.interaction;
+  const terminal=FEEDBACK_TERMINAL.has(replyState)||['dead','uncertain','cancelled','expired'].includes(event)||message.expires<=now||!hasActiveSubscription||!interaction?.enabled;
+  if(typeof row.payload!=='string'||row.payload.length>65536)throw Error('Unavailable feedback metadata');
+  const data=store.vault.open(row.payload,`feedback:${row.message_id}`);
+  if(!data||typeof data.uncertain!=='boolean'||!(data.reactionId===null||typeof data.reactionId==='string'))throw Error('Unavailable feedback metadata');
+  if(data.uncertain)throw Error('Uncertain feedback operation');
+  const remove=terminal||!interaction?.reactions;
+  if(remove?!!data.reactionId:!data.reactionId&&interaction?.reactions)return true;
+  if(terminal&&stream&&stream.state!=='complete'){
+    if(typeof stream.payload!=='string'||stream.payload.length>524288)throw Error('Unavailable card metadata');
+    const card=store.vault.open(stream.payload,`stream:${row.message_id}`);
+    if(!card||!(card.cardId===null||typeof card.cardId==='string')||!(card.outboundId===null||typeof card.outboundId==='string'))throw Error('Unavailable card metadata');
+    return !!(card.cardId&&card.outboundId);
+  }
+  return false;
+}
 export function legacySubscriptionDiagnostics(store) {
   return {
     load(){
@@ -31,6 +57,17 @@ export function inspectLegacyRuntimeStatus(store,{principal,now,callbackHosts,bi
   // Include all queued outbound mutations: final replies, stream frames and
   // feedback jobs. Event callbacks are a separate delivery queue.
   for(const item of store.all("SELECT state,count(*) AS n FROM jobs WHERE kind<>'event' AND state IN ('pending','processing','uncertain') GROUP BY state"))replyWork[item.state]=item.n;
+  // A displayed active indicator is not queued work. Count it only when the
+  // protected flags and source state require a new mutation or terminal cleanup.
+  // No message body or private flag value is returned in this snapshot.
+  if(store.get("SELECT name FROM sqlite_master WHERE type='table' AND name='feedback'")){
+    for(const item of store.all("SELECT message_id,payload,state,lease_until FROM feedback WHERE state IN ('pending','active','working','uncertain')")){
+      if(item.state==='pending')replyWork.pending++;
+      else if(item.state==='uncertain')replyWork.uncertain++;
+      else if(item.state==='working')replyWork[Number.isSafeInteger(item.lease_until)&&item.lease_until>now?'processing':'uncertain']++;
+      else try{if(activeFeedbackNeedsMutation(store,item,now,subscription.state==='active'))replyWork.pending++;}catch{replyWork.uncertain++;}
+    }
+  }
   const result={subscription_active:subscription.state==='active'&&allowed,subscription_status:subscription,subscription_diagnostics:diagnostics,reply_work:replyWork,
     media_limits:{read_bytes:readBytes,reply_bytes:replyBytes,mcp_body_bytes:MEDIA_RPC_LIMIT,tunnel_envelope_bytes:TUNNEL_ENVELOPE_BYTES}};
   if(typeof bindingReady==='boolean')result.binding_ready=bindingReady;

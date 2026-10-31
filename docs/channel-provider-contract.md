@@ -135,6 +135,12 @@ client can work with older backends without inventing missing observations:
 - `reply_work`: complete persisted `pending`, `processing` and `uncertain`
   reply counts. The existing ten-item pending-reference list is not an outbox
   total and cannot establish that an upgrade or rollback is safe.
+  The established Lark/QQ adapter counts all non-event jobs and Feishu's
+  separate feedback queue. An already displayed `active` indicator is excluded;
+  it counts only when source state and protected indicator/card flags require
+  a new mutation or terminal cleanup. A leased `working` row counts as processing;
+  an expired working lease or uncertain row counts as uncertain. Only counts are
+  returned, never private flag values, card references, identities or text.
 - `media_limits`: `read_bytes`, `reply_bytes`, `mcp_body_bytes` and
   `tunnel_envelope_bytes`; these describe byte budgets, not provider connectivity.
 - `media_readiness`: optional booleans `reply_publisher_configured` and
