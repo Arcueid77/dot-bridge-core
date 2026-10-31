@@ -40,6 +40,8 @@ test('connection advice is derived from observed stages and never from configura
  assert.equal(connectionStatus({...input,subscription:subscriptionStatus({active:true},now,[])}).reason,'subscription_unknown');
  const legacy=connectionStatus({...input,settingName:'MCP_CALLBACK_ALLOWED_HOSTS',wrongSettingPresent:true});
  assert.equal(legacy.callback_setting_name,'MCP_CALLBACK_ALLOWED_HOSTS');assert.equal(legacy.wrong_callback_setting_present,true);assert.equal(Object.hasOwn(legacy,'legacy_callback_alias_present'),false);
+ assert.equal(connectionStatus({...input,gatewayConnected:false,gatewayRequiresSubscription:true}).next_step,'subscribe_in_original_dot');
+ assert.equal(connectionStatus({...input,gatewayConnected:false,gatewayRequiresSubscription:true,subscription:subscriptionStatus({active:true,expires:now-1},now,[])}).next_step,'renew_in_original_dot');
 });
 
 test('new setup schemas can safely consume legacy backends that do not advertise optional status fields',()=>{

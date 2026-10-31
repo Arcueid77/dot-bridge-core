@@ -38,7 +38,7 @@ export function inspectLegacyRuntimeStatus(store,{principal,now,callbackHosts,bi
     result.gateway_connected=gatewayConnected;
     // Legacy scoped experimental transports have their own policy observation;
     // do not mislabel an active scoped grant as a global allowlist entry.
-    if(callbackHosts.length||!allowed||subscription.state!=='active')result.connection_status=connectionStatus({gatewayConnected,callbackHosts,subscription,diagnostics,callbackAllowed:allowed,settingName:'MCP_CALLBACK_ALLOWED_HOSTS',wrongSettingPresent});
+    if(callbackHosts.length||!allowed||subscription.state!=='active')result.connection_status=connectionStatus({gatewayConnected,callbackHosts,subscription,diagnostics,callbackAllowed:allowed,settingName:'MCP_CALLBACK_ALLOWED_HOSTS',wrongSettingPresent,gatewayRequiresSubscription:true});
   }
   return projectRuntimeStatus(result);
 }

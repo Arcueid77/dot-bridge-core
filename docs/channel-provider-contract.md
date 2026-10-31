@@ -160,6 +160,9 @@ actual operations with fixed stage/code/reason/hostname; diagnostic storage
 failures cannot change the subscription result. The established Lark/QQ store
 layout is inspected centrally by `channels/legacy-status.js`; its snapshot is
 read-only, principal-bound and contains no callback, key or identity values.
+For the established Lark/QQ gateway lifecycle, a missing/expired subscription is
+reported before a disconnected gateway: those gateways intentionally wait for
+subscription authorization. The underlying observed gateway boolean is unchanged.
 
 ## Subscription diagnosis
 

@@ -27,10 +27,10 @@ export function subscriptionStatus(record, now, diagnostics) {
     renewal_owner:'host',diagnostics_available:diagnostics.length > 0};
 }
 
-export function connectionStatus({gatewayConnected,callbackHosts,subscription,diagnostics,callbackAllowed,legacyAliasPresent,settingName='CALLBACK_HOSTS',wrongSettingPresent=legacyAliasPresent}) {
+export function connectionStatus({gatewayConnected,callbackHosts,subscription,diagnostics,callbackAllowed,legacyAliasPresent,settingName='CALLBACK_HOSTS',wrongSettingPresent=legacyAliasPresent,gatewayRequiresSubscription=false}) {
   if (!['CALLBACK_HOSTS','MCP_CALLBACK_ALLOWED_HOSTS'].includes(settingName)) throw Error('Unsupported callback setting name');
   let stage='ready',reason='ready',next_step='none';
-  if (!gatewayConnected) {stage='gateway';reason='gateway_disconnected';next_step='check_gateway';}
+  if (!gatewayConnected&&!gatewayRequiresSubscription) {stage='gateway';reason='gateway_disconnected';next_step='check_gateway';}
   else if (!callbackHosts.length) {stage='callback_policy';reason='callback_hosts_empty';next_step='approve_callback_hostname';}
   else if (subscription.state === 'active' && !callbackAllowed) {stage='callback_policy';reason='callback_host_not_allowlisted';next_step='approve_callback_hostname';}
   else if (subscription.state !== 'active') {
@@ -41,6 +41,7 @@ export function connectionStatus({gatewayConnected,callbackHosts,subscription,di
     else if (diagnostics.length && diagnostics.at(-1).reason !== 'subscribed') {reason='subscription_failed';next_step='inspect_subscription_diagnostics';}
     else {reason='subscription_missing';next_step='subscribe_in_original_dot';}
   }
+  else if (!gatewayConnected) {stage='gateway';reason='gateway_disconnected';next_step='check_gateway';}
   return {stage,reason,next_step,callback_hosts_count:callbackHosts.length,diagnostic_history:diagnostics.length ? 'available' : 'unavailable',callback_hosts_configured:callbackHosts.length>0,callback_setting_name:settingName,
     ...(typeof wrongSettingPresent==='boolean'?{wrong_callback_setting_present:wrongSettingPresent}:{}),
     ...(typeof legacyAliasPresent==='boolean'&&settingName==='CALLBACK_HOSTS'?{legacy_callback_alias_present:legacyAliasPresent}:{})};
