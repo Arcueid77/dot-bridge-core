@@ -1,6 +1,8 @@
 import {BridgeError,object} from '../router/common.js';
 import {boundedString,callbackUrl} from '../router/live-contract.js';
 import {mediaCapabilities,MAX_MEDIA_BYTES,MAX_MEDIA_BASE64,MEDIA_RPC_LIMIT,decodeMedia,validateMedia,projectAttachment} from './media.js';
+import {TUNNEL_ENVELOPE_BYTES} from './tunnel-budget.js';
+import {diagnosticStages,diagnosticReasons,connectionStages,connectionReasons,connectionNextSteps} from './status.js';
 
 const bool={type:'boolean'},str={type:'string'},empty={type:'object',properties:{},additionalProperties:false};
 const schema=(properties,required=Object.keys(properties))=>({type:'object',properties,required,additionalProperties:false});
@@ -11,8 +13,15 @@ export function definitions(channel){
  const c=channel.id,media=mediaCapabilities(channel);
  const tool=(name,description,inputSchema,outputSchema,readOnlyHint=true)=>({name,description,inputSchema,outputSchema,annotations:{readOnlyHint,destructiveHint:false,idempotentHint:true,openWorldHint:!readOnlyHint}});
  const pending=schema({message_id:id,reply_deadline:{type:'string',format:'date-time'},reply_status:status});
- const diagnostic=schema({at:{type:'string',format:'date-time'},stage:{type:'string',enum:['validate','policy','transport','challenge','persist','complete']},code:{type:['integer','null']},reason:{type:'string',enum:['invalid_request','callback_policy_required','transport_unavailable','challenge_failed','timeout','subscription_conflict','subscription_cancelled','storage_unavailable','subscribed']},hostname:{type:['string','null'],maxLength:253}});
- const setup=schema({binding_ready:bool,gateway_connected:bool,subscription_active:bool,callback_hostname:{type:['string','null']},callback_policy:{type:'string',enum:['not_provided','invalid','not_allowlisted','allowlisted']},pending_messages:{type:'array',maxItems:10,items:pending},subscription_diagnostics:{type:'array',maxItems:5,items:diagnostic}});
+ const diagnostic=schema({at:{type:'string',format:'date-time'},stage:{type:'string',enum:diagnosticStages},code:{type:['integer','null']},reason:{type:'string',enum:diagnosticReasons},hostname:{type:['string','null'],maxLength:253}});
+ const count={type:'integer',minimum:0};
+ const subscription=schema({state:{type:'string',enum:['none','active','expired','disabled','unknown']},expires_at:{type:['string','null'],format:'date-time'},remaining_seconds:{type:['integer','null'],minimum:0},renewal_owner:{type:'string',const:'host'},diagnostics_available:bool});
+ const connection=schema({stage:{type:'string',enum:connectionStages},reason:{type:'string',enum:connectionReasons},next_step:{type:'string',enum:connectionNextSteps},callback_hosts_count:{type:'integer',minimum:0,maximum:16},diagnostic_history:{type:'string',enum:['available','unavailable']},callback_hosts_configured:bool,legacy_callback_alias_present:bool},['stage','reason','next_step','callback_hosts_count','diagnostic_history']);
+ const setup=schema({binding_ready:bool,gateway_connected:bool,subscription_active:bool,callback_hostname:{type:['string','null']},callback_policy:{type:'string',enum:['not_provided','invalid','not_allowlisted','allowlisted']},pending_messages:{type:'array',maxItems:10,items:pending},subscription_diagnostics:{type:'array',maxItems:5,items:diagnostic},
+  subscription_status:subscription,connection_status:connection,reply_work:schema({pending:count,processing:count,uncertain:count}),
+  media_limits:schema({read_bytes:{type:'integer',minimum:0,maximum:MAX_MEDIA_BYTES},reply_bytes:{type:'integer',minimum:0,maximum:MAX_MEDIA_BYTES},mcp_body_bytes:{type:'integer',const:MEDIA_RPC_LIMIT},tunnel_envelope_bytes:{type:'integer',const:TUNNEL_ENVELOPE_BYTES}}),
+  media_readiness:schema({reply_publisher_configured:bool,reply_publisher_required:bool},['reply_publisher_configured']),
+  reply_capabilities:schema({max_text_chars:{type:'integer',minimum:1,maximum:20000},native_text_chars:{type:'integer',minimum:1,maximum:20000},long_reply_mode:{type:'string',enum:['file','chunks','none']}})},['binding_ready','gateway_connected','subscription_active','callback_hostname','callback_policy','pending_messages','subscription_diagnostics']);
  const message=schema({message_id:id,conversation:{type:'string',const:'owner'},text:{type:'string',maxLength:20000},attachments:{type:'array',maxItems:10,items:schema({kind:str,name:str,mimeType:str},['kind'])},reply_deadline:{type:'string',format:'date-time'},reply_status:status});
  const reply=schema({message_id:id,status});
  const input=schema({message_id:id});
@@ -35,7 +44,7 @@ function assertOutput(value,s){
  if(s.type==='array'){if(!Array.isArray(value)||value.length>(s.maxItems??100))throw Error();for(const v of value)assertOutput(v,s.items);return;}
  if(value===null&&Array.isArray(s.type)&&s.type.includes('null'))return;
  const type=Array.isArray(s.type)?s.type.find(t=>t!=='null'):s.type;
- if(type==='integer'){if(!Number.isSafeInteger(value)||value<(s.minimum??Number.MIN_SAFE_INTEGER)||value>(s.maximum??Number.MAX_SAFE_INTEGER))throw Error();return;}
+ if(type==='integer'){if(!Number.isSafeInteger(value)||value<(s.minimum??Number.MIN_SAFE_INTEGER)||value>(s.maximum??Number.MAX_SAFE_INTEGER)||(s.const!==undefined&&value!==s.const))throw Error();return;}
  if(typeof value!==type)throw Error();
  if(type==='string'){boundedString(value,s.maxLength??2048,{empty:!(s.minLength>0),multiline:true});if(s.format==='date-time'&&!Number.isFinite(Date.parse(value)))throw Error();}
  if(s.enum&&!s.enum.includes(value))throw Error();if(s.const!==undefined&&s.const!==value)throw Error();
@@ -48,8 +57,9 @@ export function createChannelAdapter(channel){
    if(name===d.readinessTool.name||name===d.backendSetupTool.name){object(args,live?['callback_url']:[]);if(args.callback_url!==undefined)callbackUrl(args.callback_url);return {...args};}
    if(!live)throw new BridgeError('Channel is not live',{status:403,code:-32012});
    const spec=d.liveTools.find(t=>t.name===name);if(!spec)throw new BridgeError('Unknown channel tool');
-   object(args,Object.keys(spec.inputSchema.properties),spec.inputSchema.required);for(const[k,v]of Object.entries(args))assertOutput(v,spec.inputSchema.properties[k]);
+   object(args,Object.keys(spec.inputSchema.properties),spec.inputSchema.required);
    if(name===`reply_${c}_media`){const bytes=decodeMedia(args.data);try{validateMedia({type:args.type,data:bytes,mimeType:args.mime_type,name:args.name});}finally{bytes.fill(0);}}
+   for(const[k,v]of Object.entries(args))assertOutput(v,spec.inputSchema.properties[k]);
    return {...args};
   },
   projectToolResult(call,result,live){
@@ -60,7 +70,13 @@ export function createChannelAdapter(channel){
    if(call.name===`get_${c}_attachment`)return projectAttachment(call,result);
    return result.structuredContent;
   },
-  matchesBackendOutputSchema(_name,actual,expected,sameSchema){return sameSchema(actual,expected);},
+  matchesBackendOutputSchema(name,actual,expected,sameSchema){
+   if(sameSchema(actual,expected))return true;
+   if(name!==d.backendSetupTool.name||!actual?.properties)return false;
+   const optional=['subscription_status','connection_status','reply_work','media_limits','media_readiness','reply_capabilities'];
+   if(Object.keys(actual.properties).some(k=>!Object.hasOwn(expected.properties,k))||Object.keys(expected.properties).some(k=>!Object.hasOwn(actual.properties,k)&&!optional.includes(k)))return false;
+   return sameSchema(actual,{...expected,properties:Object.fromEntries(Object.entries(expected.properties).filter(([k])=>Object.hasOwn(actual.properties,k)))});
+  },
   isCallbackPolicyError:e=>e.code===-32015&&e.data?.reason==='callback_policy_required'
  });
 }

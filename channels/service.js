@@ -4,7 +4,9 @@ import {validateEventCall,boundedString,callbackUrl} from '../router/live-contra
 import {makeCallbackTransport,validateCallbackUrl,decodeWebhookKey,signedHeaders} from '../packages/dot-bridge-transport/index.js';
 import {createChannelAdapter,definitions} from './contract.js';
 import {ChannelStore,hash} from './store.js';
-import {mediaCapabilities,validateMedia,decodeMedia,attachmentResult,mediaName,mediaMime} from './media.js';
+import {mediaCapabilities,validateMedia,decodeMedia,attachmentResult,mediaName,mediaMime,MAX_MEDIA_BYTES,MAX_MEDIA_BASE64,MEDIA_RPC_LIMIT} from './media.js';
+import {TUNNEL_ENVELOPE_BYTES} from './tunnel-budget.js';
+import {subscriptionDiagnostics,subscriptionStatus,connectionStatus} from './status.js';
 import {transcribeAudio} from '../audio/transcription.js';
 
 const denied=()=>new BridgeError('Message or subscription is unavailable',{status:403,code:-32012});
@@ -42,7 +44,18 @@ export class ChannelService{
  setup(args={}){
   let hostname=null,policy='not_provided';
   if(args.callback_url!==undefined){try{hostname=callbackUrl(args.callback_url).hostname;policy=this.config.callbackHosts.includes(hostname)?'allowlisted':'not_allowlisted';}catch{policy='invalid';}}
-  return {binding_ready:true,gateway_connected:this.provider.status()?.connected===true,subscription_active:!!this.subscription(),callback_hostname:hostname,callback_policy:policy,pending_messages:this.store.pending(this.clock()),subscription_diagnostics:this.store.get('subscription_diagnostics')??[]};
+  const providerStatus=this.provider.status(),gatewayConnected=providerStatus?.connected===true,now=this.clock(),record=this.store.get('subscription');
+  const diagnostics=subscriptionDiagnostics(this.store.get('subscription_diagnostics'));
+  const subscription=subscriptionStatus(record,now,diagnostics);
+  let callbackAllowed=false;try{callbackAllowed=this.config.callbackHosts.includes(callbackUrl(record?.url).hostname);}catch{}
+  const replyWork={pending:0,processing:0,uncertain:0};
+  for(const row of this.store.db.prepare("SELECT reply_state,count(*) AS n FROM channel_messages WHERE reply_state IN ('pending','processing','uncertain') GROUP BY reply_state").all())replyWork[row.reply_state]=row.n;
+  const mediaReadiness=typeof providerStatus?.mediaPublisherConfigured==='boolean'?{reply_publisher_configured:providerStatus.mediaPublisherConfigured,...(typeof providerStatus.mediaPublisherRequired==='boolean'?{reply_publisher_required:providerStatus.mediaPublisherRequired}:{})}:undefined;
+  const nativeLimit=this.config.channel.nativeMaxReplyText,longMode=this.config.channel.longReplyMode;
+  const replyCapabilities=Number.isSafeInteger(nativeLimit)&&nativeLimit>0&&nativeLimit<=this.config.maxReplyText&&['file','chunks','none'].includes(longMode)?{max_text_chars:this.config.maxReplyText,native_text_chars:nativeLimit,long_reply_mode:longMode}:undefined;
+  return {binding_ready:true,gateway_connected:gatewayConnected,subscription_active:!!this.subscription(),callback_hostname:hostname,callback_policy:policy,pending_messages:this.store.pending(now),subscription_diagnostics:diagnostics,
+   subscription_status:subscription,connection_status:connectionStatus({gatewayConnected,callbackHosts:this.config.callbackHosts,subscription,diagnostics,callbackAllowed,legacyAliasPresent:this.config.callbackHostsLegacyAliasPresent}),reply_work:replyWork,
+   media_limits:{read_bytes:this.media.read.length?MAX_MEDIA_BYTES:0,reply_bytes:this.media.reply.length?MAX_MEDIA_BYTES:0,mcp_body_bytes:MEDIA_RPC_LIMIT,tunnel_envelope_bytes:TUNNEL_ENVELOPE_BYTES},...(mediaReadiness?{media_readiness:mediaReadiness}:{}),...(replyCapabilities?{reply_capabilities:replyCapabilities}:{})};
  }
  async subscribe(params){
   const diagnostic={at:new Date(this.clock()).toISOString(),stage:'validate',code:null,reason:'invalid_request',hostname:null};
@@ -164,6 +177,10 @@ export class ChannelService{
    const row=this.store.db.prepare("SELECT id FROM channel_messages WHERE subscription_id=? AND expires>? AND (reply_state='pending' OR (event_state='pending' AND reply_state='none' AND event_next_at<=?)) ORDER BY CASE reply_state WHEN 'pending' THEN 0 ELSE 1 END,created LIMIT 1").get(`${sub.id}:${sub.generation}`,this.clock(),this.clock());
    if(!row)return;const message=this.store.message(row.id);const replying=message.reply_state==='pending',column=replying?'reply_state':'event_state';
    try{this.authorized(message);}catch{this.store.db.prepare(`UPDATE channel_messages SET ${column}='cancelled' WHERE id=?`).run(row.id);continue;}
+   // A pre-upgrade oversized queued reply is already encrypted approved work.
+   // Keep it pending for an explicit rollback/recovery; do not claim an
+   // uncertain send when no provider request has been attempted.
+   if(replying){const queued=this.store.open(message.reply,`reply:${row.id}`);if(typeof queued.media?.data==='string'&&(queued.media.data.length>MAX_MEDIA_BASE64||Buffer.byteLength(queued.media.data,'base64')>MAX_MEDIA_BYTES))return;}
    this.store.db.prepare(`UPDATE channel_messages SET ${column}='processing' WHERE id=? AND ${column}='pending'`).run(row.id);
    if(!replying)this.store.db.prepare('UPDATE channel_messages SET event_attempts=event_attempts+1 WHERE id=?').run(row.id);
    try{

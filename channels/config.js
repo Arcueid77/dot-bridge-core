@@ -32,7 +32,7 @@ export function createChannelConfig(channel,env=process.env){
  if(callbackHosts.length>16||new Set(callbackHosts).size!==callbackHosts.length||callbackHosts.some(h=>!validHostname(h)))throw Error('Callback hosts must be exact DNS names');
  const maxReplyText=channel.maxReplyText??20000;
  if(!Number.isSafeInteger(maxReplyText)||maxReplyText<1||maxReplyText>20000)throw Error('Invalid channel text bound');
- Object.assign(config,{credentials,storageKey,dbPath,bridgeLockDirectory,callbackHosts,maxReplyText,subscriptionTtlMs:604800000,retentionMs:604800000});
+ Object.assign(config,{credentials,storageKey,dbPath,bridgeLockDirectory,callbackHosts,callbackHostsLegacyAliasPresent:Boolean(env.MCP_CALLBACK_ALLOWED_HOSTS),maxReplyText,subscriptionTtlMs:604800000,retentionMs:604800000});
  if(channel.webhookPort!==undefined){
   const rawWebhook=env[`${channel.envPrefix}_WEBHOOK_PORT`]??String(channel.webhookPort);
   if(!/^[1-9][0-9]{0,4}$/.test(rawWebhook)||Number(rawWebhook)>65535||Number(rawWebhook)===config.port)throw Error('Invalid webhook loopback port');

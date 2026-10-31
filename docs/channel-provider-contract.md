@@ -76,7 +76,7 @@ a caption: one source message has one durable final reply.
 `readAttachment({message, attachmentIndex})` returns
 `{data: Buffer, mimeType: string, name?: string}`. Download only the reference in
 the authorized stored message; validate the exact official host and path, bound
-the response to 8 MiB, and never follow redirects. Core checks authorization
+the response to `MAX_MEDIA_BYTES` (currently 5 MiB), and never follow redirects. Core checks authorization
 before and after the read and after optional local transcription. No file IDs,
 provider URLs or tokens appear in the public tool result. Raw source audio and
 reference transcription are distinct; do not label a transcript as hearing.
@@ -104,12 +104,57 @@ never tool input or environment configuration.
 PCM16 mono WAV at supported sample rates, at most 120 seconds and 8 MiB. Providers
 still apply their own stricter media limits before queueing.
 
+## Tunnel budgets and authenticated status
+
+Import `MAX_MEDIA_BYTES`, `MAX_MEDIA_BASE64` and `MEDIA_RPC_LIMIT` from
+`@dot-bridge/core/channels/media.js`; do not maintain per-channel copies of the
+shared Tunnel allowance. Smaller platform limits still apply. The current 5 MiB
+original-file limit leaves room for Base64, duplicated metadata and the complete
+official 10 MiB serialized Tunnel envelope. The media RPC budget includes 512 KiB
+for JSON/UTF-8 metadata. A separate 256 KiB envelope reserve is retained even in
+the conservative case where the entire MCP body is Base64-encoded again. The
+official client's `jsonrpc` / `resp_json` fields currently carry raw JSON.
+
+The existing `check_<channel>_setup` and live readiness results retain their
+original required fields. These additional fields are optional, so a management
+client can work with older backends without inventing missing observations:
+
+- `subscription_status`: `state` is `none`, `active`, `expired`, `disabled` or
+  `unknown`; `expires_at` and `remaining_seconds` come only from stored data,
+  otherwise they are null. `renewal_owner` is `host`. `none` describes the current
+  absence of a stored subscription, not whether a past request ever arrived.
+- `connection_status`: fixed `stage`, `reason`, `next_step`, exact
+  `callback_hosts_count`, and `diagnostic_history` (`available` / `unavailable`).
+  `callback_hosts_configured` reports whether the validated correct setting has
+  entries. `legacy_callback_alias_present` reports only whether the unsupported
+  `MCP_CALLBACK_ALLOWED_HOSTS` name has a value. It never enables that alias.
+- `reply_work`: complete persisted `pending`, `processing` and `uncertain`
+  reply counts. The existing ten-item pending-reference list is not an outbox
+  total and cannot establish that an upgrade or rollback is safe.
+- `media_limits`: `read_bytes`, `reply_bytes`, `mcp_body_bytes` and
+  `tunnel_envelope_bytes`; these describe byte budgets, not provider connectivity.
+- `media_readiness`: optional booleans `reply_publisher_configured` and
+  `reply_publisher_required`, projected only from corresponding boolean
+  `status().mediaPublisherConfigured` / `mediaPublisherRequired`. No URL or key is
+  exposed; unknown observations are omitted.
+- `reply_capabilities`: emitted only when channel metadata explicitly declares
+  `nativeMaxReplyText` and `longReplyMode`. It contains `max_text_chars`,
+  `native_text_chars` and `long_reply_mode` (`file`, `chunks` or `none`). Providers
+  own the safe single-operation long-reply behavior; core does not truncate or
+  blindly retry text as a second media reply after an uncertain send.
+
+`subscription_diagnostics` retains only existing records, at most five, with
+time, stage, RPC code, fixed reason and hostname. No records means the failure
+cannot be reconstructed. Status reads do not approve hosts, contact callbacks,
+create/renew subscriptions or mutate private configuration. Subscription expiry
+does not grant the bridge authority to renew a host-owned subscription.
+
 ## Subscription diagnosis
 
 The setup tool returns the last five `subscription_diagnostics` records. They
 contain only UTC time, a fixed phase/reason, RPC code and validated hostname.
 They are stored in encrypted metadata with the existing storage key. Empty
-history means no recorded attempt under this version; it does not reconstruct
-old failures. Never retain callback paths, signing keys, identity or provider
+history means no usable stored record; it does not establish whether a request
+arrived, and cannot reconstruct old failures. Never retain callback paths, signing keys, identity or provider
 exception text. Generic channels use `CALLBACK_HOSTS`; legacy QQ/Lark still use
 `MCP_CALLBACK_ALLOWED_HOSTS`. An incorrect-only alias is rejected explicitly.

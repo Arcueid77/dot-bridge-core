@@ -214,3 +214,47 @@ test('subscription diagnostics retain fixed failure stages across restart withou
  const result=await rpc(route.port,fs.readFileSync(f.keys[1],'utf8'),'events/subscribe',subscription());assert.equal(result.body.error.code,-32015);assert.deepEqual(result.body.error.data,{reason:'challenge_failed',callback_hostname:'callback.example.com'});
  assert.throws(()=>createChannelConfig(channel,{...f.env,CALLBACK_HOSTS:'',MCP_CALLBACK_ALLOWED_HOSTS:'callback.example.com'}),/CALLBACK_HOSTS/);
 });
+
+test('setup reports actual subscription expiry and complete durable work counts without changing the database',async t=>{
+ const f=fixture(t),{service}=serviceFixture(t,f),initial=service.setup();
+ assert.equal(initial.subscription_status.state,'none');assert.equal(initial.subscription_status.expires_at,null);
+ assert.equal(initial.connection_status.diagnostic_history,'unavailable');assert.equal(initial.connection_status.callback_hosts_count,1);
+ assert.equal(initial.connection_status.callback_hosts_configured,true);assert.equal(initial.connection_status.legacy_callback_alias_present,false);
+ await service.subscribe(subscription());await settle(service);
+ const record=service.store.get('subscription'),before=service.store.db.prepare("SELECT value FROM channel_metadata WHERE key='subscription'").get().value;
+ assert.equal(service.setup().subscription_status.expires_at,new Date(record.expires).toISOString());
+ assert.equal(service.setup().connection_status.reason,'ready');
+ service.clock=()=>record.expires+1;
+ assert.equal(service.setup().subscription_status.state,'expired');assert.equal(service.setup().connection_status.next_step,'renew_in_original_dot');
+ assert.equal(service.store.db.prepare("SELECT value FROM channel_metadata WHERE key='subscription'").get().value,before);
+ service.clock=Date.now;service.store.set('subscription',{...record,active:false});
+ for(let i=0;i<18;i++){const id=await service.ingest(incoming(`count-${i}`));service.store.db.prepare('UPDATE channel_messages SET reply_state=? WHERE id=?').run(i<12?'pending':i<16?'processing':'uncertain',id);}
+ const snapshot=service.setup();assert.deepEqual(snapshot.reply_work,{pending:12,processing:4,uncertain:2});assert.equal(snapshot.pending_messages.length,10);
+ await service.close();const reopened=serviceFixture(t,f);assert.deepEqual(reopened.service.setup().reply_work,{pending:12,processing:0,uncertain:6});
+});
+
+test('pre-upgrade oversized queued media remains pending and encrypted across restart with no send attempt',async t=>{
+ const f=mediaFixture(t),{service}=f;await service.subscribe(subscription());const id=await service.ingest(incoming('legacy-large'));await settle(service);
+ const legacy={text:'',idempotencyKey:'legacy-once',media:{type:'file',data:Buffer.alloc(MAX_MEDIA_BYTES+1,65).toString('base64'),mimeType:'application/octet-stream',name:'legacy.bin'}};
+ const sealed=service.store.seal(legacy,`reply:${id}`);service.store.db.prepare("UPDATE channel_messages SET reply=?,reply_digest='legacy-fixture',reply_state='pending' WHERE id=?").run(sealed,id);
+ await service.drain();assert.equal(f.calls.length,0);assert.equal(service.store.message(id).reply_state,'pending');assert.equal(service.store.message(id).reply,sealed);
+ await service.close();let attempts=0;
+ const next=new ChannelService(f.config,{transport:transportFixture().send,createProvider:()=>({start:async()=>{},stop:async()=>{},status:()=>({connected:true}),sendReply:async()=>{},readAttachment:async()=>{},sendMediaReply:async()=>{attempts++;}})});beforeFixtureCleanup(t,()=>next.close());
+ await next.drain();assert.equal(attempts,0);assert.equal(next.store.message(id).reply_state,'pending');assert.equal(next.store.message(id).reply,sealed);assert.equal(next.setup().reply_work.pending,1);
+});
+
+test('maximum-sized attachment and reply traverse the actual authenticated router at the new safe limit',async t=>{
+ const f=mediaFixture(t,{read:async()=>({data:Buffer.alloc(MAX_MEDIA_BYTES,65),mimeType:'application/octet-stream',name:'max.bin'})}),{service}=f;
+ await service.subscribe(subscription());const id=await service.ingest({...incoming('limit'),attachments:[{kind:'file',name:'max.bin'}]});await settle(service);
+ const backend=channelServer(f.config,service),address=await backend.listen(0);beforeFixtureCleanup(t,()=>backend.close());
+ const adapter=createChannelAdapter(mediaChannel),router=createApp({host:'127.0.0.1',port:8798,owner:OWNER,operation:'live',liveChannels:['fixture'],ingressKeyFile:f.keys[1],channels:{fixture:{adapter,port:address.port,keyFile:f.keys[0]}}},{approvedLive:true});
+ const route=await router.listen(0);beforeFixtureCleanup(t,()=>router.close());const key=fs.readFileSync(f.keys[1],'utf8');
+ const read=await rpc(route.port,key,'tools/call',{name:'get_fixture_attachment',arguments:{message_id:id,attachment_index:0}});
+ assert.equal(read.status,200);assert.equal(read.body.result.structuredContent.size,MAX_MEDIA_BYTES);
+ const args={message_id:id,type:'file',data:Buffer.alloc(MAX_MEDIA_BYTES+1,65).toString('base64'),mime_type:'application/octet-stream',name:'answer.bin',idempotency_key:'max-once'};
+ const rejected=await rpc(route.port,key,'tools/call',{name:'reply_fixture_media',arguments:args});assert.equal(rejected.status,400);assert.equal(rejected.body.error.code,-32602);assert.equal(f.calls.length,0);assert.equal(service.store.message(id).reply_state,'none');
+ args.data=Buffer.alloc(MAX_MEDIA_BYTES,65).toString('base64');assert.equal((await rpc(route.port,key,'tools/call',{name:'reply_fixture_media',arguments:args})).status,200);await settle(service);
+ assert.equal(f.calls.length,1);assert.equal(f.calls[0].media.data.length,MAX_MEDIA_BYTES);
+ const ready=await rpc(route.port,key,'tools/call',{name:'check_fixture_readiness',arguments:{}});assert.equal(ready.status,200);
+ assert.equal(ready.body.result.structuredContent.media_limits.read_bytes,MAX_MEDIA_BYTES);assert.equal(ready.body.result.structuredContent.subscription_status.state,'active');
+});

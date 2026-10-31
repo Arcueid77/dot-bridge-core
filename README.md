@@ -33,6 +33,21 @@ expose bounded attachment reads and a single final text or media reply. Private
 download references remain encrypted, and authorization is checked again before
 each stage of a media send. Setup tools expose redacted subscription diagnostics.
 
+MCP attachment reads and replies are limited to 5 MiB per original file. Base64,
+duplicated transcript metadata and the official Tunnel envelope consume additional
+space; the raw file limit is not the Tunnel's serialized 10 MiB limit. Providers
+may impose smaller format-specific bounds. Pre-upgrade oversized queued media is
+kept encrypted and pending without a send attempt. Resolve outstanding work before
+upgrading, or recover it with the previous compatible release; never delete a
+queue or automatically resend an uncertain reply to make an upgrade pass.
+
+Authenticated setup/readiness tools expose optional subscription expiry,
+connection-stage advice, callback-setting presence/counts and complete durable
+reply-work counts. Expiry comes only from stored subscription data. Empty
+diagnostic history means the prior failure cannot be reconstructed; it does not
+prove that no request reached the bridge. Older backends without these fields
+remain supported and must be displayed as unknown rather than inferred ready.
+
 Subscriptions expire after at most seven days. The original dot must renew them
 before the returned `refreshBefore`; the bridge cannot independently renew a
 host-owned subscription. An inactive subscription pauses callback and reply
