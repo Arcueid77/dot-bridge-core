@@ -128,6 +128,10 @@ client can work with older backends without inventing missing observations:
   `callback_hosts_configured` reports whether the validated correct setting has
   entries. `legacy_callback_alias_present` reports only whether the unsupported
   `MCP_CALLBACK_ALLOWED_HOSTS` name has a value. It never enables that alias.
+  New clients should use `callback_setting_name` (the fixed correct name for
+  this channel) and `wrong_callback_setting_present`. Established Lark/QQ use
+  `MCP_CALLBACK_ALLOWED_HOSTS`; the six generic providers use `CALLBACK_HOSTS`.
+  Reporting the other name never accepts it or migrates the configuration.
 - `reply_work`: complete persisted `pending`, `processing` and `uncertain`
   reply counts. The existing ten-item pending-reference list is not an outbox
   total and cannot establish that an upgrade or rollback is safe.
@@ -148,6 +152,14 @@ time, stage, RPC code, fixed reason and hostname. No records means the failure
 cannot be reconstructed. Status reads do not approve hosts, contact callbacks,
 create/renew subscriptions or mutate private configuration. Subscription expiry
 does not grant the bridge authority to renew a host-owned subscription.
+
+Provider adapters extending existing status tools use `runtimeStatusProperties`,
+`projectRuntimeStatus` and `optionalStatusSchemaMatch` from `channels/status.js`.
+Unknown observations remain absent. `trackSubscriptionAttempt` records only
+actual operations with fixed stage/code/reason/hostname; diagnostic storage
+failures cannot change the subscription result. The established Lark/QQ store
+layout is inspected centrally by `channels/legacy-status.js`; its snapshot is
+read-only, principal-bound and contains no callback, key or identity values.
 
 ## Subscription diagnosis
 

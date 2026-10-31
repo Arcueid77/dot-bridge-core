@@ -6,7 +6,7 @@ import {createChannelAdapter,definitions} from './contract.js';
 import {ChannelStore,hash} from './store.js';
 import {mediaCapabilities,validateMedia,decodeMedia,attachmentResult,mediaName,mediaMime,MAX_MEDIA_BYTES,MAX_MEDIA_BASE64,MEDIA_RPC_LIMIT} from './media.js';
 import {TUNNEL_ENVELOPE_BYTES} from './tunnel-budget.js';
-import {subscriptionDiagnostics,subscriptionStatus,connectionStatus} from './status.js';
+import {subscriptionDiagnostics,subscriptionStatus,connectionStatus,trackSubscriptionAttempt} from './status.js';
 import {transcribeAudio} from '../audio/transcription.js';
 
 const denied=()=>new BridgeError('Message or subscription is unavailable',{status:403,code:-32012});
@@ -58,18 +58,8 @@ export class ChannelService{
    media_limits:{read_bytes:this.media.read.length?MAX_MEDIA_BYTES:0,reply_bytes:this.media.reply.length?MAX_MEDIA_BYTES:0,mcp_body_bytes:MEDIA_RPC_LIMIT,tunnel_envelope_bytes:TUNNEL_ENVELOPE_BYTES},...(mediaReadiness?{media_readiness:mediaReadiness}:{}),...(replyCapabilities?{reply_capabilities:replyCapabilities}:{})};
  }
  async subscribe(params){
-  const diagnostic={at:new Date(this.clock()).toISOString(),stage:'validate',code:null,reason:'invalid_request',hostname:null};
-  try{diagnostic.hostname=callbackUrl(params?.delivery?.url).hostname;}catch{/* No unvalidated destination is retained. */}
-  try{const result=await this.subscribeVerified(params,diagnostic);diagnostic.stage='complete';diagnostic.reason='subscribed';return result;}
-  catch(error){
-   diagnostic.code=error instanceof BridgeError?error.code:-32603;
-   diagnostic.reason=error?.data?.reason==='callback_policy_required'?'callback_policy_required':
-    diagnostic.stage==='transport'?'transport_unavailable':diagnostic.stage==='challenge'?(error?.data?.reason==='timeout'?'timeout':'challenge_failed'):
-    diagnostic.stage==='persist'?'storage_unavailable':error?.code===-32013?'subscription_conflict':error?.code===-32012?'subscription_cancelled':'invalid_request';
-   throw error;
-  }finally{
-   try{this.store.set('subscription_diagnostics',[...(this.store.get('subscription_diagnostics')??[]),diagnostic].slice(-5));}catch{/* Diagnostics must not alter subscription success/failure. */}
-  }
+  return trackSubscriptionAttempt(params,diagnostic=>this.subscribeVerified(params,diagnostic),{clock:this.clock,
+   load:()=>this.store.get('subscription_diagnostics'),save:value=>this.store.set('subscription_diagnostics',value)});
  }
  async subscribeVerified(params,diagnostic){
   const route={operation:'live',liveChannels:[this.config.channel.id],channels:{[this.config.channel.id]:{adapter:this.adapter}}};
