@@ -27,6 +27,11 @@ Exports:
 The new channel runtime accepts messages only from the configured owner private
 chat. It persists polling state and queues before acknowledging messages, and
 keeps uncertain callback/reply attempts without automatically resending them.
+
+Supported media channels also provide source-attachment replies: dot can reuse
+the current message's attachment by index without reconstructing Base64. Text
+files include bounded UTF-8/UTF-16 excerpts with explicit truncation; the original
+bytes remain available. Provider format and caption limits still apply.
 Each channel supplies only its platform protocol implementation, following the
 [provider contract](docs/channel-provider-contract.md). Media-capable providers
 expose bounded attachment reads and a single final text or media reply. Private

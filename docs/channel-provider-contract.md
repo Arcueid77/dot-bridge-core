@@ -81,6 +81,26 @@ before and after the read and after optional local transcription. No file IDs,
 provider URLs or tokens appear in the public tool result. Raw source audio and
 reference transcription are distinct; do not label a transcript as hearing.
 
+Core also exposes `reply_<channel>_attachment` when both attachment reads and media
+replies are available. It accepts the authorized source message and attachment
+index, an optional supported reply type/caption, and a stable idempotency key.
+It reads the stored source reference internally, applies the normal provider
+validation and persists the same encrypted byte plan used by media replies.
+Identical retries return that persisted result before downloading again, even
+after a restart or an uncertain send. A different final reply remains a conflict.
+No recipient, second source message, provider ID, URL or local path is accepted.
+
+For this internal read only, core passes `forReply: true` to `readAttachment`.
+A provider may retain a validated original audio encoding instead of converting
+it for model playback. This flag does not widen source authorization or format,
+byte and duration limits. All provider errors still stop before queueing.
+
+Readable passive text files include a bounded `extracted_text` fallback. UTF-8
+and BOM-marked UTF-16 are decoded without a child process. Binary, malformed and
+control-bearing files remain binary; PDF/Office parsing is not supplied by this
+helper. `extraction_status: truncated` explicitly identifies a prefix; the full
+original attachment remains available. Excerpts are untrusted source content.
+
 `validateMediaReply({media, text})` is an optional synchronous validation step
 before queueing. Reject formats, sizes and captions the provider cannot send.
 `sendMediaReply({message, media, text, idempotencyKey, authorize})` accepts

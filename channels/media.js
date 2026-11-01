@@ -64,6 +64,8 @@ export function attachmentResult(value, bytes) {
 // through an otherwise valid structured result. Rebuild the content ourselves.
 export function projectAttachment(call, result) {
   const value = result.structuredContent;
+  const hasText=typeof value.extracted_text==='string';
+  if(['complete','truncated'].includes(value.extraction_status)!==hasText||(hasText&&(!value.extracted_text.length||value.kind==='image')))throw bad();
   if (value.message_id !== call.arguments.message_id || value.attachment_index !== call.arguments.attachment_index || !Array.isArray(result.content) || result.content.length !== 2) throw bad();
   const block = result.content[1];
   const encoded = value.kind === 'image' || (value.kind === 'audio' && block?.type === 'audio') ? block?.data : block?.resource?.blob;

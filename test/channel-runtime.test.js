@@ -136,6 +136,68 @@ function mediaFixture(t,{read,send,validate,transcribe}={}){
   validateMediaReply:validate??(()=>{}),sendMediaReply:send??(async args=>{calls.push({...args,media:{...args.media,data:Buffer.from(args.media.data)}});})
  })});beforeFixtureCleanup(t,()=>service.close());return {...f,config,service,calls};
 }
+test('source attachment replies cross the router once and persist bytes without a model Base64 round trip',async t=>{
+ let reads=0;const source=Buffer.from('reusable source file');
+ const f=mediaFixture(t,{read:async input=>{assert.equal(input.forReply,true);reads++;return {data:Buffer.from(source),mimeType:'text/plain',name:'note.txt'};}}),{service}=f;
+ await service.subscribe(subscription());const id=await service.ingest({...incoming(),attachments:[{kind:'file',name:'note.txt'}],replyContext:{downloadToken:'never-export-private-reference'}});await settle(service);
+ const backend=channelServer(f.config,service),address=await backend.listen(0);beforeFixtureCleanup(t,()=>backend.close());
+ const adapter=createChannelAdapter(mediaChannel),router=createApp({host:'127.0.0.1',port:8798,owner:OWNER,operation:'live',liveChannels:['fixture'],ingressKeyFile:f.keys[1],channels:{fixture:{adapter,port:address.port,keyFile:f.keys[0]}}},{approvedLive:true});
+ const route=await router.listen(0);beforeFixtureCleanup(t,()=>router.close());
+ const args={message_id:id,attachment_index:0,idempotency_key:'source-once'};
+ const response=await rpc(route.port,fs.readFileSync(f.keys[1],'utf8'),'tools/call',{name:'reply_fixture_attachment',arguments:args});
+ assert.equal(response.status,200);await settle(service);
+ assert.equal(reads,1);assert.equal(f.calls.length,1);assert.deepEqual(f.calls[0].media.data,source);
+ assert.equal(f.calls[0].message.conversationId,'fixture-chat');assert.equal(JSON.stringify(response).includes('never-export-private-reference'),false);
+ assert.equal((await service.call('reply_fixture_attachment',{...args,type:'file'})).status,'sent');await settle(service);
+ assert.equal(reads,1);assert.equal(f.calls.length,1);
+ assert.throws(()=>service.call('reply_fixture_attachment',{...args,idempotency_key:'different'}));
+ assert.throws(()=>service.call('reply_fixture_media',{message_id:id,type:'file',data:source.toString('base64'),mime_type:'text/plain',name:'note.txt',idempotency_key:'source-once'}));
+});
+
+test('source attachment replies refuse foreign fields, unavailable kinds and revocation during the read',async t=>{
+ let finish,reads=0;const bytes=Buffer.from('private source');
+ const f=mediaFixture(t,{read:()=>{reads++;return new Promise(resolve=>{finish=()=>resolve({data:bytes,mimeType:'text/plain',name:'a.txt'});});}}),{service}=f;
+ await service.subscribe(subscription());const id=await service.ingest({...incoming(),attachments:[{kind:'file'},{kind:'video'}]});await settle(service);
+ const args={message_id:id,attachment_index:0,idempotency_key:'bound-source'};
+ for(const change of [{recipient:'other'},{url:'https://untrusted.example.com/a'},{source_message_id:'other'},{attachment_index:9},{attachment_index:1},{message_id:'unavailable'}])assert.throws(()=>service.call('reply_fixture_attachment',{...args,...change}));
+ assert.equal(reads,0);
+ const reading=service.call('reply_fixture_attachment',args);
+ assert.throws(()=>service.call('get_fixture_attachment',{message_id:id,attachment_index:0}));
+ const {secret,...delivery}=subscription().delivery;service.unsubscribe({name:subscription().name,arguments:{conversation:'owner'},delivery});finish();
+ await assert.rejects(reading);assert.equal(service.store.message(id).reply_state,'cancelled');assert.equal(bytes.every(n=>n===0),true);assert.equal(f.calls.length,0);
+});
+
+test('source audio is never transcribed or silently downgraded when it is being forwarded',async t=>{
+ let transcriptions=0;
+ const f=mediaFixture(t,{read:async()=>({data:Buffer.from('source-audio'),mimeType:'audio/unsupported',name:'voice.bin'}),transcribe:async()=>{transcriptions++;},validate:({media})=>{if(media.type==='audio')throw Error('unsupported audio');}}),{service}=f;
+ await service.subscribe(subscription());const id=await service.ingest({...incoming(),attachments:[{kind:'audio'}]});await settle(service);
+ const args={message_id:id,attachment_index:0,idempotency_key:'audio-source'};
+ await assert.rejects(service.call('reply_fixture_attachment',args));assert.equal(service.store.message(id).reply_state,'none');assert.equal(f.calls.length,0);
+ await service.call('reply_fixture_attachment',{...args,type:'file'});await settle(service);
+ assert.equal(transcriptions,0);assert.equal(f.calls.length,1);assert.equal(f.calls[0].media.type,'file');
+});
+
+test('uncertain source media survives restart and identical retries never download or send again',async t=>{
+ const f=mediaFixture(t,{send:async()=>{throw Error('uncertain provider acknowledgement');}}),{service}=f;
+ await service.subscribe(subscription());const id=await service.ingest({...incoming(),attachments:[{kind:'file'}]});await settle(service);
+ const args={message_id:id,attachment_index:0,idempotency_key:'persisted-source'};
+ await service.call('reply_fixture_attachment',args);await settle(service);assert.equal(service.store.message(id).reply_state,'uncertain');await service.close();
+ let reads=0,sends=0;
+ const next=new ChannelService(f.config,{transport:transportFixture().send,createProvider:()=>({start:async()=>{},stop:async()=>{},status:()=>({connected:true}),sendReply:async()=>{sends++;},readAttachment:async()=>{reads++;throw Error('must not read again');},sendMediaReply:async()=>{sends++;}})});beforeFixtureCleanup(t,()=>next.close());
+ await settle(next);assert.equal((await next.call('reply_fixture_attachment',args)).status,'uncertain');await settle(next);
+ assert.equal(reads,0);assert.equal(sends,0);
+});
+
+test('text file excerpts report truncation across the router while retaining the complete original bytes',async t=>{
+ const source='a'.repeat(11999)+'🙂'+'z'.repeat(1000);
+ const f=mediaFixture(t,{read:async()=>({data:Buffer.from(source),mimeType:'text/plain',name:'note.txt'})}),{service}=f;
+ await service.subscribe(subscription());const id=await service.ingest({...incoming(),attachments:[{kind:'file'}]});await settle(service);
+ const result=toolResult(await service.call('get_fixture_attachment',{message_id:id,attachment_index:0}));
+ assert.equal(result.structuredContent.extraction_status,'truncated');assert.equal(result.structuredContent.extracted_text,'a'.repeat(11999));
+ const projected=createChannelAdapter(mediaChannel).projectToolResult({name:'get_fixture_attachment',arguments:{message_id:id,attachment_index:0}},result,true);
+ assert.equal(projected[RICH_TOOL_RESULT],true);assert.equal(Buffer.from(projected.content[1].resource.blob,'base64').toString(),source);
+});
+
 test('binary attachment and a large single media reply cross the authenticated router without leaking private refs',async t=>{
  const f=mediaFixture(t),{service}=f;await service.subscribe(subscription());
  const id=await service.ingest({...incoming(),attachments:[{kind:'file',name:'note.txt'}],replyContext:{downloadToken:'never-export-private-token'}});await settle(service);
