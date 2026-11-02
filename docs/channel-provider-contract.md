@@ -218,8 +218,17 @@ forking this implementation. An in-flight send on restart becomes uncertain;
 recurring schedules also pause on uncertainty. The engine retains deduplication
 tombstones, purges terminal text after seven days, and bounds saved tasks.
 
-Providers currently implemented: Lark, Telegram, Discord, DingTalk, WeCom and LINE.
-QQ and Weixin expose only a read-only capability check; a source context is not
+Providers currently implemented: Lark, QQ, Telegram, Discord, DingTalk, WeCom and LINE.
+QQ uses the C2C proactive HTTP form without msg_id or event_id. Application
+eligibility and platform quota still require operator verification; local opt-in
+does not verify either. Weixin exposes only a read-only capability check. A source context is not
 silently reused as general proactive authority. Incoming event tasks remain
 separate from saved schedules. Fixed literal text is scheduled by the bridge;
 future model-generated work requires an actual saved task on the original dot.
+
+An adapter may throw `OutboundRejection` with a fixed permission, quota, or generic
+rejection reason only after an explicit provider rejection. Core persists a
+`rejected` result, pauses recurring work, and never retries it. Ambiguous responses,
+5xx, timeouts, and arbitrary exceptions remain `uncertain`; no provider text or
+trace ID is stored in these status fields. Rejected work remains inspectable and
+cancellable, and its terminal text follows the seven-day retention policy.

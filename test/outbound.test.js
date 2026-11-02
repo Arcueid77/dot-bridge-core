@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {ChannelStore} from '../channels/store.js';
-import {OwnerOutbox,outboundDefinitions,outboundEnabled,validateOutboundArguments,projectOutboundResult,nextOutboundTime} from '../channels/outbound.js';
+import {OwnerOutbox,OutboundRejection,outboundDefinitions,outboundEnabled,validateOutboundArguments,projectOutboundResult,nextOutboundTime} from '../channels/outbound.js';
 import {createChannelAdapter} from '../channels/contract.js';
 import {registerAdapters} from '../router/registry.js';
 import {toolResult} from '../router/common.js';
@@ -24,11 +24,32 @@ test('outbound mode is opt-in and cannot be enabled through readiness, OAuth or 
   assert.equal(outboundEnabled(env),true);
   for(const patch of [{DOT_BRIDGE_OUTBOUND:'true'},{AUTH_MODE:'oauth'},{TUNNEL_SERVICE_OPERATION:'readiness'},{BRIDGE_MODE:'sites'},{CALLBACK_TRANSPORT_MODE:'owner-scoped-proxy'}])assert.throws(()=>outboundEnabled({...env,...patch}));
 });
-test('disabled sends are refused; QQ and Weixin advertise a capability check only',async t=>{
+test('disabled sends are refused; QQ has owner tools and Weixin remains capability-only',async t=>{
   const f=fixture(t,{enabled:false});
   assert.equal(f.box.call('check_telegram_outbound',{}).reason,'disabled');
   assert.throws(()=>f.box.call('send_telegram_message',send()));assert.equal(await f.box.tick(),false);assert.equal(f.sent.length,0);
-  for(const c of ['qq','weixin'])assert.deepEqual(outboundDefinitions(c).map(t=>t.name),[`check_${c}_outbound`]);
+  assert.equal(outboundDefinitions('qq').length,7);
+  assert.deepEqual(outboundDefinitions('weixin').map(t=>t.name),['check_weixin_outbound']);
+});
+
+test('QQ explicit platform rejection persists, pauses recurring work, and never retries after reopening',async t=>{
+  let attempts=0;
+  const f=fixture(t,{channel:'qq',send:async args=>{args.authorize();attempts++;throw new OutboundRejection('provider_quota_exhausted');}});
+  const args=once({repeat:'daily',until:'2026-11-04T01:00:00Z'}),saved=f.box.call('schedule_qq_message',args);
+  f.time('2026-11-02T01:00:00Z');await f.box.tick();
+  const result=f.box.call('get_qq_outbound',{outbound_id:saved.outbound_id});
+  assert.equal(result.status,'rejected');assert.equal(result.reason,'provider_quota_exhausted');
+  assert.deepEqual(projectOutboundResult('qq',{name:'get_qq_outbound',arguments:{outbound_id:saved.outbound_id}},toolResult(result)),result);
+  await f.box.close();const reopened=new OwnerOutbox(f.settings);f.time('2026-11-03T01:00:00Z');await reopened.tick();
+  assert.equal(attempts,1);assert.equal(reopened.call('schedule_qq_message',args).status,'rejected');
+  assert.equal(reopened.call('list_qq_scheduled_messages',{}).messages[0].status,'rejected');
+  assert.equal(reopened.call('cancel_qq_scheduled_message',{outbound_id:saved.outbound_id,expected_revision:1}).last_status,'rejected');
+});
+
+test('unclassified failures stay uncertain even if an arbitrary error claims quota rejection',async t=>{
+  const f=fixture(t,{channel:'qq',send:async()=>{throw {reason:'provider_quota_exhausted'};}});
+  const saved=f.box.call('send_qq_message',send());await f.box.tick();
+  assert.equal(f.box.call('get_qq_outbound',{outbound_id:saved.outbound_id}).status,'uncertain');
 });
 test('owner-only closed contracts reject recipient, group, URL, source message, malformed text and unknown arguments',()=>{
   for(const patch of [{conversation:'group'},{recipient:'other'},{chat_id:'other'},{url:'https://example.com'},{message_id:'old-message'},{text:' '},{text:'\ud800'},{text:'secret\x00'}])assert.throws(()=>validateOutboundArguments('telegram','send_telegram_message',send(patch)));
