@@ -218,11 +218,13 @@ forking this implementation. An in-flight send on restart becomes uncertain;
 recurring schedules also pause on uncertainty. The engine retains deduplication
 tombstones, purges terminal text after seven days, and bounds saved tasks.
 
-Providers currently implemented: Lark, QQ, Telegram, Discord, DingTalk, WeCom and LINE.
+Providers currently implemented: Lark, QQ, Weixin, Telegram, Discord, DingTalk, WeCom and LINE.
 QQ uses the C2C proactive HTTP form without msg_id or event_id. Application
 eligibility and platform quota still require operator verification; local opt-in
-does not verify either. Weixin exposes only a read-only capability check. A source context is not
-silently reused as general proactive authority. Incoming event tasks remain
+does not verify either. Weixin sends an independent request without `context_token`;
+verify account acceptance and actual receipt before relying on it. An explicit
+nonzero business response becomes rejected; a missing ACK remains uncertain.
+A source context is never reused as general proactive authority. Incoming event tasks remain
 separate from saved schedules. Fixed literal text is scheduled by the bridge;
 future model-generated work requires an actual saved task on the original dot.
 

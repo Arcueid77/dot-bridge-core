@@ -24,12 +24,23 @@ test('outbound mode is opt-in and cannot be enabled through readiness, OAuth or 
   assert.equal(outboundEnabled(env),true);
   for(const patch of [{DOT_BRIDGE_OUTBOUND:'true'},{AUTH_MODE:'oauth'},{TUNNEL_SERVICE_OPERATION:'readiness'},{BRIDGE_MODE:'sites'},{CALLBACK_TRANSPORT_MODE:'owner-scoped-proxy'}])assert.throws(()=>outboundEnabled({...env,...patch}));
 });
-test('disabled sends are refused; QQ has owner tools and Weixin remains capability-only',async t=>{
+test('disabled sends are refused; QQ and Weixin expose the same owner-only outbound tools',async t=>{
   const f=fixture(t,{enabled:false});
   assert.equal(f.box.call('check_telegram_outbound',{}).reason,'disabled');
   assert.throws(()=>f.box.call('send_telegram_message',send()));assert.equal(await f.box.tick(),false);assert.equal(f.sent.length,0);
   assert.equal(outboundDefinitions('qq').length,7);
-  assert.deepEqual(outboundDefinitions('weixin').map(t=>t.name),['check_weixin_outbound']);
+  assert.equal(outboundDefinitions('weixin').length,7);
+});
+
+test('Weixin platform rejection persists across restart without retry or changing incoming subscriptions',async t=>{
+  let attempts=0;
+  const f=fixture(t,{channel:'weixin',send:async args=>{args.authorize();assert.equal(Object.hasOwn(args,'message'),false);attempts++;throw new OutboundRejection('provider_rejected');}});
+  const args=once(),saved=f.box.call('schedule_weixin_message',args);
+  f.time('2026-11-02T01:00:00Z');await f.box.tick();await f.box.close();
+  const reopened=new OwnerOutbox(f.settings);await reopened.tick();
+  assert.equal(reopened.call('schedule_weixin_message',args).status,'rejected');
+  assert.equal(reopened.call('get_weixin_outbound',{outbound_id:saved.outbound_id}).reason,'provider_rejected');
+  assert.equal(attempts,1);
 });
 
 test('QQ explicit platform rejection persists, pauses recurring work, and never retries after reopening',async t=>{
