@@ -107,12 +107,31 @@ test('new channel integrates through real authenticated router tool/event catalo
  const f=fixture(t),{service}=serviceFixture(t,f),backend=channelServer(f.config(),service);const address=await backend.listen(0);beforeFixtureCleanup(t,()=>backend.close());
  const router=createApp({host:'127.0.0.1',port:8798,owner:OWNER,operation:'live',liveChannels:['fixture'],ingressKeyFile:f.keys[1],channels:{fixture:{adapter:createChannelAdapter(channel),port:address.port,keyFile:f.keys[0]}}},{approvedLive:true});
  const route=await router.listen(0);beforeFixtureCleanup(t,()=>router.close());const key=fs.readFileSync(f.keys[1],'utf8');
- const catalog=await rpc(route.port,key,'tools/list');assert.equal(catalog.status,200);assert.equal(catalog.body.result.tools.length,4);
+ const catalog=await rpc(route.port,key,'tools/list');assert.equal(catalog.status,200);assert.equal(catalog.body.result.tools.length,5);
+ assert.ok(catalog.body.result.tools.some(tool=>tool.name==='check_fixture_outbound'));
  assert.equal((await rpc(route.port,key,'events/list')).body.result.events[0].name,'fixture.message.created');
  const setup=await rpc(route.port,key,'tools/call',{name:'check_fixture_readiness',arguments:{}});assert.equal(setup.status,200);assert.equal(setup.body.result.structuredContent.binding_ready,true);
  assert.equal((await rpc(route.port,'invalid','tools/list')).status,401);
  const subscribed=await rpc(route.port,key,'events/subscribe',subscription());assert.match(subscribed.body.result.id,/^sub_/);
  const id=await service.ingest(incoming());await settle(service);const msg=await rpc(route.port,key,'tools/call',{name:'get_fixture_message',arguments:{message_id:id}});assert.equal(msg.body.result.structuredContent.text,'private synthetic message');
+});
+
+test('a saved future owner message crosses authenticated router and persists independently of an incoming subscription',async t=>{
+ const f=fixture(t),calls=[],c={...channel,id:'telegram',envPrefix:'TELEGRAM'},config={...f.config(),channel:c,outboundEnabled:true};
+ let now=Date.parse('2026-11-02T00:00:00Z');
+ const service=new ChannelService(config,{clock:()=>now,createProvider:()=>({start:async()=>{},stop:async()=>{},status:()=>({connected:true}),sendReply:async()=>{},sendOwnerMessage:async args=>{args.authorize();calls.push(args);}})});
+ beforeFixtureCleanup(t,()=>service.close());
+ const backend=channelServer(config,service),address=await backend.listen(0);beforeFixtureCleanup(t,()=>backend.close());
+ const router=createApp({host:'127.0.0.1',port:8798,owner:OWNER,operation:'live',liveChannels:['telegram'],ingressKeyFile:f.keys[1],channels:{telegram:{adapter:createChannelAdapter(c),port:address.port,keyFile:f.keys[0]}}},{approvedLive:true});
+ const route=await router.listen(0);beforeFixtureCleanup(t,()=>router.close());const key=fs.readFileSync(f.keys[1],'utf8');
+ const args={conversation:'owner',text:'fixture future notification',send_at:'2026-11-02T09:00:00+08:00',timezone:'Asia/Singapore',repeat:'once',until:null,idempotency_key:'fixture-saved-reminder'};
+ const queued=await rpc(route.port,key,'tools/call',{name:'schedule_telegram_message',arguments:args});assert.equal(queued.status,200);
+ const saved=queued.body.result.structuredContent;assert.equal(saved.status,'active');assert.match(saved.outbound_id,/^out_/);await settle(service);assert.equal(calls.length,0);assert.equal(service.subscription(),undefined);
+ const readonly=await rpc(route.port,key,'tools/call',{name:'check_telegram_outbound',arguments:{}});assert.equal(readonly.body.result.structuredContent.enabled,true);
+ now+=3600000;await settle(service);assert.equal(calls.length,1);assert.equal(calls[0].text,args.text);assert.equal(Object.hasOwn(calls[0],'message'),false);
+ const result=await rpc(route.port,key,'tools/call',{name:'get_telegram_outbound',arguments:{outbound_id:saved.outbound_id}});assert.equal(result.body.result.structuredContent.status,'sent');
+ const again=await rpc(route.port,key,'tools/call',{name:'schedule_telegram_message',arguments:args});assert.equal(again.body.result.structuredContent.outbound_id,saved.outbound_id);await settle(service);assert.equal(calls.length,1);
+ const rejected=await rpc(route.port,key,'tools/call',{name:'schedule_telegram_message',arguments:{...args,recipient:'other'}});assert.ok(rejected.body.error);
 });
 
 test('dedicated loopback webhook forwards bounded raw bytes only to signature-verifying provider',async t=>{

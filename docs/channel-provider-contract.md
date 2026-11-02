@@ -199,3 +199,27 @@ history means no usable stored record; it does not establish whether a request
 arrived, and cannot reconstruct old failures. Never retain callback paths, signing keys, identity or provider
 exception text. Generic channels use `CALLBACK_HOSTS`; legacy QQ/Lark still use
 `MCP_CALLBACK_ALLOWED_HOSTS`. An incorrect-only alias is rejected explicitly.
+# Owner proactive text and saved reminders
+
+The optional `sendOwnerMessage({text,idempotencyKey,authorize})` provider method
+sends to the credential-bound owner private chat, without a source message,
+reply token, caller-supplied recipient or extended passive reply deadline.
+`authorize()` must run synchronously immediately before each mutation, including
+after token acquisition. Never retry a mutation or use a fallback recipient.
+Only the original live standard Tunnel mode may enable `DOT_BRIDGE_OUTBOUND=owner-text`.
+The default is disabled. Provider enrollment factories must not expose this method.
+
+`channels/outbound.js` owns the closed MCP schemas, encrypted durable queue,
+calendar recurrence, CAS editing, cancellation, bounded execution and restart
+recovery. Each backend uses its existing private SQLite connection and encryption
+key; no separate account, database, callback or model API is provisioned.
+Native legacy backends bind the same engine to their existing vault, rather than
+forking this implementation. An in-flight send on restart becomes uncertain;
+recurring schedules also pause on uncertainty. The engine retains deduplication
+tombstones, purges terminal text after seven days, and bounds saved tasks.
+
+Providers currently implemented: Lark, Telegram, Discord, DingTalk, WeCom and LINE.
+QQ and Weixin expose only a read-only capability check; a source context is not
+silently reused as general proactive authority. Incoming event tasks remain
+separate from saved schedules. Fixed literal text is scheduled by the bridge;
+future model-generated work requires an actual saved task on the original dot.
