@@ -16,7 +16,7 @@ test('extraction inventory preserves shared runtime source and reviewed test/doc
  assert.deepEqual(actual.sort(),[...seen].sort());
 });
 test('distribution has explicit public files, no provider dependencies or sibling imports',()=>{
- const pkg=JSON.parse(fs.readFileSync(new URL('package.json',root),'utf8'));assert.equal(pkg.dependencies,undefined);assert.equal(pkg.devDependencies,undefined);
+ const pkg=JSON.parse(fs.readFileSync(new URL('package.json',root),'utf8'));assert.deepEqual(pkg.dependencies,{'markdown-it':'15.0.3'});assert.equal(pkg.devDependencies,undefined);
  assert.equal(pkg.files.some(file=>/\.env|credentials|sqlite|\.git|dot-(?:qq|lark)-bridge/.test(file)),false);
  for(const file of fs.readdirSync(new URL('router/',root)))assert.equal(/from\s+['"][^'"]*(?:dot-(?:qq|lark)-bridge|lark-contract)/.test(fs.readFileSync(new URL(`router/${file}`,root),'utf8')),false);
 });

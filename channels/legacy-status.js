@@ -57,6 +57,7 @@ export function inspectLegacyRuntimeStatus(store,{principal,now,callbackHosts,bi
   // Include all queued outbound mutations: final replies, stream frames and
   // feedback jobs. Event callbacks are a separate delivery queue.
   for(const item of store.all("SELECT state,count(*) AS n FROM jobs WHERE kind<>'event' AND state IN ('pending','processing','uncertain') GROUP BY state"))replyWork[item.state]=item.n;
+  if(store.get("SELECT name FROM sqlite_master WHERE type='table' AND name='bridge_management_reply'"))for(const item of store.all("SELECT state,count(*) AS n FROM bridge_management_reply WHERE state IN ('pending','processing','uncertain') GROUP BY state"))replyWork[item.state]+=item.n;
   // A displayed active indicator is not queued work. Count it only when the
   // protected flags and source state require a new mutation or terminal cleanup.
   // No message body or private flag value is returned in this snapshot.

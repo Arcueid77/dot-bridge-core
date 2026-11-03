@@ -24,8 +24,8 @@ Exports:
   owner-bound MCP tools/events, encrypted SQLite inbox and outbox, callback
   verification, service authentication and graceful process lifecycle.
 
-The new channel runtime accepts messages only from the configured owner private
-chat. It persists polling state and queues before acknowledging messages, and
+The runtime defaults to the bound owner private chat. Telegram and Discord may
+opt into protected group/topic rules with independent context scopes. It persists polling state and queues before acknowledging messages, and
 keeps uncertain callback/reply attempts without automatically resending them.
 
 Supported media channels also provide source-attachment replies: dot can reuse
@@ -129,3 +129,7 @@ Actual adapter/router integration runs in the Feishu repository without optional
 sibling-path skips. The QQ repository retains thin two-adapter compatibility
 exports and regression fixtures for the old finite-window development launcher;
 these are not required by Feishu or the persistent VPS deployment.
+
+Shared interaction modules add bounded processing feedback, genuine progressive edits, isolated recent context, safe Markdown rendering, protected PDF/Office excerpts, durable native reply parts and owner IM management. Hosted-dot controls remain on the original platform.
+
+[简体中文](README.zh-CN.md) · [English](README.md)

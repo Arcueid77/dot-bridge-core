@@ -59,7 +59,8 @@ export function runtimeStatusProperties() {
     reply_work:schema({pending:count,processing:count,uncertain:count}),
     media_limits:schema({read_bytes:{type:'integer',minimum:0,maximum:MAX_MEDIA_BYTES},reply_bytes:{type:'integer',minimum:0,maximum:MAX_MEDIA_BYTES},mcp_body_bytes:{type:'integer',const:MEDIA_RPC_LIMIT},tunnel_envelope_bytes:{type:'integer',const:TUNNEL_ENVELOPE_BYTES}}),
     media_readiness:schema({reply_publisher_configured:bool,reply_publisher_required:bool},['reply_publisher_configured']),
-    reply_capabilities:schema({max_text_chars:{type:'integer',minimum:1,maximum:20000},native_text_chars:{type:'integer',minimum:1,maximum:20000},long_reply_mode:{type:'string',enum:['file','chunks','none']}})
+    reply_capabilities:schema({max_text_chars:{type:'integer',minimum:1,maximum:20000},native_text_chars:{type:'integer',minimum:1,maximum:20000},long_reply_mode:{type:'string',enum:['file','chunks','none']}}),
+    experience_capabilities:schema({feedback_enabled:bool,typing:bool,reactions:bool,progressive_replies:bool,recent_context:bool,management_commands:bool,configured_groups:{type:'integer',minimum:0,maximum:50},hosted_dot_controls:bool})
   };
 }
 export const RUNTIME_STATUS_FIELDS=Object.freeze(Object.keys(runtimeStatusProperties()));

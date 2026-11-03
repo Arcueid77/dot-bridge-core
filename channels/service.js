@@ -8,30 +8,37 @@ import {mediaCapabilities,validateMedia,decodeMedia,attachmentResult,mediaName,m
 import {TUNNEL_ENVELOPE_BYTES} from './tunnel-budget.js';
 import {subscriptionDiagnostics,subscriptionStatus,connectionStatus,trackSubscriptionAttempt} from './status.js';
 import {transcribeAudio} from '../audio/transcription.js';
-import {extractDocumentText} from './documents.js';
 import {OwnerOutbox,isOutboundTool,OUTBOUND_INSTRUCTIONS} from './outbound.js';
+import {conversationRoute,routeOf,interactionPolicy,cleanQuote} from './experience-policy.js';
+import {ChannelExperience} from './experience.js';
+import {ChannelManagement} from './management.js';
+import {ReplyParts} from './reply-parts.js';
+import {readableDocument} from './document-process.js';
 
 const denied=()=>new BridgeError('Message or subscription is unavailable',{status:403,code:-32012});
 const jsonBound=value=>{if(JSON.stringify(value).length>65536)throw new BridgeError('Provider message exceeds private metadata limit');return value;};
 function webhookHeaders(sub,id,body,now){const key=decodeWebhookKey(sub.secret);try{return signedHeaders({id:sub.id,key},id,body,now);}finally{key.fill(0);}}
 export class ChannelService{
- constructor(config,{createProvider,store,transport,clock=Date.now,providerOptions={},transcribe=transcribeAudio}={}){
+ constructor(config,{createProvider,store,transport,clock=Date.now,providerOptions={},transcribe=transcribeAudio,documentReader=readableDocument}={}){
   this.config=config;this.clock=clock;this.adapter=createChannelAdapter(config.channel);this.definitions=definitions(config.channel);this.controller=new AbortController();
-  this.store=store??new ChannelStore(config);this.transport=transport??makeCallbackTransport({proxyEnv:process.env});this.closed=false;this.working=null;this.media=mediaCapabilities(config.channel);this.transcribe=transcribe;this.reads=new Set();
+  this.store=store??new ChannelStore(config);this.transport=transport??makeCallbackTransport({proxyEnv:process.env});this.closed=false;this.working=null;this.media=mediaCapabilities(config.channel);this.transcribe=transcribe;this.documentReader=documentReader;this.reads=new Set();
   try{
-   this.provider=createProvider({credentials:config.credentials,state:{get:k=>this.store.get(`provider:${k}`),set:(k,v)=>this.store.set(`provider:${k}`,v),delete:k=>this.store.delete(`provider:${k}`)},onMessage:m=>this.ingest(m),signal:this.controller.signal,...providerOptions});
+   this.provider=createProvider({credentials:config.credentials,interaction:config.interaction??interactionPolicy({},config.channel),state:{get:k=>this.store.get(`provider:${k}`),set:(k,v)=>this.store.set(`provider:${k}`,v),delete:k=>this.store.delete(`provider:${k}`)},onMessage:m=>this.ingest(m),signal:this.controller.signal,...providerOptions});
    if(!this.provider||['start','stop','status','sendReply'].some(k=>typeof this.provider[k]!=='function'))throw Error('Invalid provider contract');
    if((this.media.read.length&&typeof this.provider.readAttachment!=='function')||(this.media.reply.length&&typeof this.provider.sendMediaReply!=='function'))throw Error('Media capability does not match provider');
+   this.experience=new ChannelExperience(this);
+   this.management=new ChannelManagement(this);
+   this.replyParts=new ReplyParts(this);
    this.outbox=new OwnerOutbox({channel:config.channel.id,db:this.store.db,seal:(v,a)=>this.store.seal(v,a),open:(v,a)=>this.store.open(v,a),enabled:config.outboundEnabled===true,clock,
     available:()=>!this.closed&&this.provider.status()?.connected===true,send:typeof this.provider.sendOwnerMessage==='function'?args=>this.provider.sendOwnerMessage(args):undefined});
   }catch(e){this.store.close();throw e;}
  }
  subscription(){const s=this.store.get('subscription');return s&&s.active&&s.expires>this.clock()?s:undefined;}
  policy(url){const u=validateCallbackUrl(url);if(!this.config.callbackHosts.includes(u.hostname))throw new BridgeError('Callback hostname requires separate approval',{status:403,code:-32015,data:{reason:'callback_policy_required',callback_hostname:u.hostname}});return u;}
- authorized(row){const sub=this.subscription();if(!row||row.expires<=this.clock()||!sub||row.subscription_id!==`${sub.id}:${sub.generation}`)throw denied();this.policy(sub.url);return sub;}
+ authorized(row){const sub=this.subscription();if(!row||row.expires<=this.clock()||!conversationRoute(this.config,row.message))throw denied();if(row.message.control&&this.management.marked(row.id))return undefined;if(!sub||row.subscription_id!==`${sub.id}:${sub.generation}`||(routeOf(this.config,row.message)?.scope==='configured'&&(sub.scope??'owner')!=='configured'))throw denied();this.policy(sub.url);return sub;}
  async ingest(raw){
   if(this.closed||this.controller.signal.aborted)throw Error('Channel is stopping');
-  if(!raw||raw.senderId!==this.config.credentials.ownerId||raw.conversationId!==this.config.credentials.conversationId)return false;
+  if(!raw)return false;
   const now=this.clock();boundedString(raw.id,256);
   if(typeof(raw.text??'')!=='string')throw Error('Invalid provider text');
   const text=(raw.text??'').toWellFormed().replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu,'\ufffd');boundedString(text,20000,{empty:true,multiline:true});
@@ -40,10 +47,13 @@ export class ChannelService{
   const expires=Math.min(raw.replyDeadline??now+900000,now+900000);if(expires<=now)return false;
   const attachments=raw.attachments??[];if(!Array.isArray(attachments)||attachments.length>10)throw Error('Invalid attachment metadata');
   const normalized=attachments.map(item=>{object(item,['kind','name','mimeType'],['kind']);boundedString(item.kind,32);if(item.name!==undefined)boundedString(item.name,256);if(item.mimeType!==undefined)boundedString(item.mimeType,128);return {...item};});
-  const message={id:raw.id,senderId:raw.senderId,conversationId:raw.conversationId,text,timestamp:raw.timestamp??now,replyDeadline:expires,attachments:normalized,...(raw.replyContext===undefined?{}:{replyContext:jsonBound(raw.replyContext)})};
+  const route=conversationRoute(this.config,{...raw,text});if(!route)return false;
+  boundedString(raw.senderId,256);boundedString(raw.conversationId,256);
+  const message={id:raw.id,senderId:raw.senderId,conversationId:raw.conversationId,text,timestamp:raw.timestamp??now,replyDeadline:expires,attachments:normalized,route,chatType:raw.chatType??'private',botMentioned:raw.botMentioned===true,forwarded:raw.forwarded===true,...(raw.threadId===undefined?{}:{threadId:raw.threadId}),...(raw.quote===undefined?{}:{quote:cleanQuote(raw.quote)}),...(raw.replyContext===undefined?{}:{replyContext:jsonBound(raw.replyContext)})};
   if(!message.text&&!normalized.length)return false;
-  const sub=this.subscription(),ref=sub?{id:`${sub.id}:${sub.generation}`} :undefined;
-  this.store.purge(now);const result=this.store.insert(message,now,expires,ref);this.wake();return result;
+  const sub=this.subscription(),ref=sub&&(route.scope==='owner'||sub.scope==='configured')?{id:`${sub.id}:${sub.generation}`} :undefined;
+  const command=this.management.command(message);if(command)message.control=true;
+  this.store.purge(now);const result=this.store.tx(()=>{const inserted=this.store.insert(message,now,expires,ref);if(inserted){const row=this.store.message(inserted);if(command)this.management.handle(row,command);else this.experience.accepted(row);}return inserted;});this.wake();return result;
  }
  setup(args={}){
   let hostname=null,policy='not_provided';
@@ -54,12 +64,16 @@ export class ChannelService{
   let callbackAllowed=false;try{callbackAllowed=this.config.callbackHosts.includes(callbackUrl(record?.url).hostname);}catch{}
   const replyWork={pending:0,processing:0,uncertain:0};
   for(const row of this.store.db.prepare("SELECT reply_state,count(*) AS n FROM channel_messages WHERE reply_state IN ('pending','processing','uncertain') GROUP BY reply_state").all())replyWork[row.reply_state]=row.n;
+  for(const item of this.store.db.prepare('SELECT e.message_id,e.inflight,m.reply_state FROM channel_experience e JOIN channel_messages m ON m.id=e.message_id').all()){
+   const state=this.experience.get(item.message_id);if(item.reply_state!=='uncertain'&&state.streamState==='uncertain')replyWork.uncertain++;
+   else if(item.reply_state!=='processing'&&item.inflight===1)replyWork.processing++;
+  }
   const mediaReadiness=typeof providerStatus?.mediaPublisherConfigured==='boolean'?{reply_publisher_configured:providerStatus.mediaPublisherConfigured,...(typeof providerStatus.mediaPublisherRequired==='boolean'?{reply_publisher_required:providerStatus.mediaPublisherRequired}:{})}:undefined;
-  const nativeLimit=this.config.channel.nativeMaxReplyText,longMode=this.config.channel.longReplyMode;
+  const nativeLimit=this.config.channel.nativeMaxReplyText,longMode=this.config.channel.experience?this.experience.policy.replies.longText:this.config.channel.longReplyMode;
   const replyCapabilities=Number.isSafeInteger(nativeLimit)&&nativeLimit>0&&nativeLimit<=this.config.maxReplyText&&['file','chunks','none'].includes(longMode)?{max_text_chars:this.config.maxReplyText,native_text_chars:nativeLimit,long_reply_mode:longMode}:undefined;
-  return {binding_ready:true,gateway_connected:gatewayConnected,subscription_active:!!this.subscription(),callback_hostname:hostname,callback_policy:policy,pending_messages:this.store.pending(now),subscription_diagnostics:diagnostics,
+  return {binding_ready:true,gateway_connected:gatewayConnected,subscription_active:!!this.subscription(),callback_hostname:hostname,callback_policy:policy,pending_messages:this.store.pending(now).filter(item=>{if(this.management.marked(item.message_id))return false;const route=conversationRoute(this.config,this.store.message(item.message_id).message);return !!route&&(route.scope==='owner'||record?.scope==='configured');}),subscription_diagnostics:diagnostics,
    subscription_status:subscription,connection_status:connectionStatus({gatewayConnected,callbackHosts:this.config.callbackHosts,subscription,diagnostics,callbackAllowed,legacyAliasPresent:this.config.callbackHostsLegacyAliasPresent}),reply_work:replyWork,
-   media_limits:{read_bytes:this.media.read.length?MAX_MEDIA_BYTES:0,reply_bytes:this.media.reply.length?MAX_MEDIA_BYTES:0,mcp_body_bytes:MEDIA_RPC_LIMIT,tunnel_envelope_bytes:TUNNEL_ENVELOPE_BYTES},...(mediaReadiness?{media_readiness:mediaReadiness}:{}),...(replyCapabilities?{reply_capabilities:replyCapabilities}:{})};
+   media_limits:{read_bytes:this.media.read.length?MAX_MEDIA_BYTES:0,reply_bytes:this.media.reply.length?MAX_MEDIA_BYTES:0,mcp_body_bytes:MEDIA_RPC_LIMIT,tunnel_envelope_bytes:TUNNEL_ENVELOPE_BYTES},...(mediaReadiness?{media_readiness:mediaReadiness}:{}),...(replyCapabilities?{reply_capabilities:replyCapabilities}:{}),...(this.config.channel.experience?{experience_capabilities:{feedback_enabled:this.experience.policy.feedback.enabled,typing:typeof this.provider.setTyping==='function',reactions:typeof this.provider.setFeedback==='function',progressive_replies:!!this.config.channel.experience.streaming,recent_context:true,management_commands:this.experience.policy.management.enabled,configured_groups:this.experience.policy.groups.filter(group=>group.enabled).length,hosted_dot_controls:false}}:{})};
  }
  async subscribe(params){
   return trackSubscriptionAttempt(params,diagnostic=>this.subscribeVerified(params,diagnostic),{clock:this.clock,
@@ -70,7 +84,7 @@ export class ChannelService{
   validateEventCall(route,'events/subscribe',params);diagnostic.stage='policy';this.policy(params.delivery.url);const key=decodeWebhookKey(params.delivery.secret);key.fill(0);
   diagnostic.stage='transport';
   const preflight=this.transport.preflight();if(!preflight.ready)throw new BridgeError('Callback transport unavailable',{status:503,code:-32015,data:{reason:preflight.reason,callback_transport:preflight}});
-  const now=this.clock(),id=`sub_${hash(JSON.stringify({channel:this.config.channel.id,owner:OWNER,url:params.delivery.url,scope:'owner'}))}`;
+  const now=this.clock(),id=`sub_${hash(JSON.stringify({channel:this.config.channel.id,owner:OWNER,url:params.delivery.url,scope:params.arguments.conversation}))}`;
   const existing=this.subscription();if(existing&&existing.id!==id)throw new BridgeError('Unsubscribe the current dot before changing its callback',{code:-32013,status:409});
   const epoch=this.store.get('subscription_epoch')??0,expires=now+Math.min(params.ttlMs??this.config.subscriptionTtlMs,this.config.subscriptionTtlMs);
   const challenge=randomBytes(32).toString('base64url'),body=Buffer.from(JSON.stringify({type:'verification',challenge}));
@@ -86,9 +100,11 @@ export class ChannelService{
    if((this.store.get('subscription_epoch')??0)!==epoch)throw denied();
    const active=this.subscription();if(active&&active.id!==id)throw denied();
    const generation=existing?.generation??randomBytes(16).toString('hex');
-   this.store.set('subscription',{id,generation,url:params.delivery.url,secret:params.delivery.secret,expires,active:true});
+   this.store.set('subscription',{id,generation,url:params.delivery.url,secret:params.delivery.secret,expires,active:true,scope:params.arguments.conversation});
    this.store.set('subscription_epoch',epoch+1);
-   this.store.db.prepare("UPDATE channel_messages SET subscription_id=? WHERE subscription_id IS NULL AND event_state='pending' AND reply_state='none' AND expires>?").run(`${id}:${generation}`,this.clock());
+   for(const candidate of this.store.db.prepare("SELECT id FROM channel_messages WHERE subscription_id IS NULL AND event_state='pending' AND reply_state='none' AND expires>?").all(this.clock())){
+    const pending=this.store.message(candidate.id);if(routeOf(this.config,pending.message)?.scope==='owner'||params.arguments.conversation==='configured')this.store.db.prepare('UPDATE channel_messages SET subscription_id=? WHERE id=?').run(`${id}:${generation}`,candidate.id);
+   }
   });this.wake();
   return {id,refreshBefore:new Date(expires).toISOString(),cursor:null,truncated:false};
  }
@@ -99,7 +115,7 @@ export class ChannelService{
    this.store.set('subscription_epoch',(this.store.get('subscription_epoch')??0)+1);
   });return {};
  }
- message(row){const m=row.message;return {message_id:row.id,conversation:'owner',text:m.text,attachments:m.attachments,reply_deadline:new Date(row.expires).toISOString(),reply_status:row.reply_state};}
+ message(row){const m=row.message,route=routeOf(this.config,m);return {message_id:row.id,conversation:route?.scope??'owner',text:m.text,attachments:m.attachments,reply_deadline:new Date(row.expires).toISOString(),reply_status:this.experience.get(row.id).streamState==='uncertain'?'uncertain':row.reply_state,...(this.config.channel.experience?{context_key:route.key,...(m.quote?.text?{quote:{text:m.quote.text,truncated:m.quote.truncated===true}}:{})}:{})};}
  withAttachment(row,index,consume,{forReply=false}={}){
   if(this.reads.size)throw new BridgeError('An attachment is already being read',{status:429,code:-32013});
   const attachment=row.message.attachments[index];
@@ -120,7 +136,7 @@ export class ChannelService{
   return this.withAttachment(row,index,async({bytes,mime,name,attachment,authorize,deadline})=>{
    let extraction={extraction_status:'not_requested'};
    if(attachment.kind==='audio')extraction=await this.transcribe(bytes,{authorize,deadline});
-   else if(attachment.kind==='file')extraction=extractDocumentText(bytes,{mimeType:mime});
+   else if(attachment.kind==='file')extraction=await this.documentReader(bytes,{mimeType:mime,authorize,deadline});
    authorize();
    const text=typeof extraction?.extracted_text==='string'?extraction.extracted_text:undefined;
    if(text!==undefined)boundedString(text,12000,{multiline:true});
@@ -145,8 +161,12 @@ export class ChannelService{
   if(name===this.definitions.backendSetupTool.name)return this.setup(args);
   if(isOutboundTool(this.config.channel.id,name)){const result=this.outbox.call(name,args);this.wake();return result;}
   this.store.expire(this.clock());const row=this.store.message(args.message_id);this.authorized(row);
-  if(name===`get_${this.config.channel.id}_message`)return this.message(row);
-  if(name===`get_${this.config.channel.id}_reply_status`)return {message_id:row.id,status:row.reply_state};
+  if(name===`get_${this.config.channel.id}_message`){if(this.config.channel.experience)this.experience.begin(row);return this.message(row);}
+  if(name===`get_${this.config.channel.id}_context`){const route=routeOf(this.config,row.message),policy=this.config.interaction??interactionPolicy({},this.config.channel);return {message_id:row.id,context_key:route.key,messages:this.store.context(row,{limit:Math.min(args.limit??policy.context.maxMessages,policy.context.maxMessages),maxChars:policy.context.maxChars})};}
+  if(name===`begin_${this.config.channel.id}_reply`)return this.experience.begin(row);
+  if(name===`append_${this.config.channel.id}_reply`)return this.experience.append(row,args);
+  if(name===`cancel_${this.config.channel.id}_reply`)return this.experience.cancel(row);
+  if(name===`get_${this.config.channel.id}_reply_status`)return this.config.channel.experience?this.experience.status(row):{message_id:row.id,status:row.reply_state};
   if(name===`get_${this.config.channel.id}_attachment`)return this.readAttachment(row,args.attachment_index);
   if(name===`reply_${this.config.channel.id}_attachment`)return this.replyAttachment(row,args);
   const mediaReply=name===`reply_${this.config.channel.id}_media`;
@@ -162,6 +182,7 @@ export class ChannelService{
    reply={text:args.text,idempotencyKey:args.idempotency_key};
   }
   const digest=mediaReply?hash(JSON.stringify(reply)):hash(JSON.stringify({text:args.text,idempotency_key:args.idempotency_key}));
+  if(this.experience.get(row.id).streamState==='uncertain')return {message_id:row.id,status:'uncertain'};
   return this.queueFinalReply(row,reply,digest,mediaReply);
  }
  queueFinalReply(row,reply,digest,mediaReply){
@@ -169,6 +190,7 @@ export class ChannelService{
    const current=this.store.message(row.id);this.authorized(current);
    if(current.reply_digest){if(current.reply_digest!==digest)throw new BridgeError('A different final reply already exists',{status:409,code:-32013});return;}
    if(current.reply_state!=='none')throw denied();
+   this.replyParts.prepare(row,reply);
    const sealed=this.store.seal(reply,`reply:${row.id}`);
    if(mediaReply&&this.store.db.prepare("SELECT coalesce(sum(length(reply)),0) AS bytes FROM channel_messages WHERE reply IS NOT NULL").get().bytes+Buffer.byteLength(sealed)>64*1024*1024)throw new BridgeError('Stored media capacity reached',{status:429,code:-32013});
    this.store.db.prepare("UPDATE channel_messages SET reply=?,reply_digest=?,reply_state='pending' WHERE id=? AND reply_state='none'").run(sealed,digest,row.id);
@@ -186,12 +208,12 @@ export class ChannelService{
    default:throw new BridgeError('Unsupported method',{code:-32601});
   }
  }
- wake(){if(this.closed||this.working)return;this.working=this.drain().catch(()=>{}).finally(()=>{this.working=null;});}
+ wake(){if(this.closed||this.working)return;this.working=Promise.resolve().then(()=>this.drain()).catch(()=>{}).finally(()=>{this.working=null;});}
  async drain(){
-  if(this.closed)return;const now=this.clock();this.store.purge(now);await this.outbox.tick();
+  if(this.closed)return;const now=this.clock();this.store.purge(now);this.store.db.prepare('DELETE FROM channel_management WHERE message_id NOT IN (SELECT id FROM channel_messages)').run();this.replyParts.cleanup();await this.experience.tick();await this.outbox.tick();
   for(let i=0;i<20&&!this.closed;i++){
-   const sub=this.subscription();if(!sub)return;
-   const row=this.store.db.prepare("SELECT id FROM channel_messages WHERE subscription_id=? AND expires>? AND (reply_state='pending' OR (event_state='pending' AND reply_state='none' AND event_next_at<=?)) ORDER BY CASE reply_state WHEN 'pending' THEN 0 ELSE 1 END,created LIMIT 1").get(`${sub.id}:${sub.generation}`,this.clock(),this.clock());
+   const sub=this.subscription(),subscriptionId=sub?`${sub.id}:${sub.generation}`:null;
+   const row=this.store.db.prepare("SELECT id FROM channel_messages WHERE expires>? AND ((reply_state='pending' AND (subscription_id=? OR EXISTS(SELECT 1 FROM channel_management WHERE message_id=channel_messages.id))) OR (subscription_id=? AND event_state='pending' AND reply_state='none' AND event_next_at<=?)) ORDER BY CASE reply_state WHEN 'pending' THEN 0 ELSE 1 END,created LIMIT 1").get(this.clock(),subscriptionId,subscriptionId,this.clock());
    if(!row)return;const message=this.store.message(row.id);const replying=message.reply_state==='pending',column=replying?'reply_state':'event_state';
    try{this.authorized(message);}catch{this.store.db.prepare(`UPDATE channel_messages SET ${column}='cancelled' WHERE id=?`).run(row.id);continue;}
    // A pre-upgrade oversized queued reply is already encrypted approved work.
@@ -204,13 +226,15 @@ export class ChannelService{
     if(replying){
      const reply=this.store.open(message.reply,`reply:${row.id}`);
      const authorize=()=>{if(this.closed)throw denied();this.authorized(this.store.message(row.id));};authorize();
-     if(reply.media){
+     if(await this.replyParts.send(message,reply,authorize)||await this.experience.sendFinal(message,reply,authorize)){
+      // Final text edits the already acknowledged native progress message.
+     }else if(reply.media){
       const bytes=decodeMedia(reply.media.data);
       try{authorize();await this.provider.sendMediaReply({message:message.message,media:{...reply.media,data:bytes},text:reply.text,idempotencyKey:reply.idempotencyKey,authorize});}finally{bytes.fill(0);}
      }else await this.provider.sendReply({message:message.message,text:reply.text,idempotencyKey:reply.idempotencyKey,authorize});
      this.store.db.prepare("UPDATE channel_messages SET reply_state='sent' WHERE id=?").run(row.id);
     }else{
-     const eventId=`evt_${hash(row.id)}`,body=Buffer.from(JSON.stringify({eventId,name:this.definitions.event.name,timestamp:new Date(message.message.timestamp).toISOString(),data:{message_id:row.id,conversation:'owner',text:message.message.text,reply_deadline:new Date(message.expires).toISOString(),attachments:message.message.attachments.length},cursor:null}));
+     const eventId=`evt_${hash(row.id)}`,body=Buffer.from(JSON.stringify({eventId,name:this.definitions.event.name,timestamp:new Date(message.message.timestamp).toISOString(),data:{message_id:row.id,conversation:routeOf(this.config,message.message)?.scope??'owner',text:message.message.text,reply_deadline:new Date(message.expires).toISOString(),attachments:message.message.attachments.length},cursor:null}));
      const response=await this.transport(sub.url,{hosts:this.config.callbackHosts,headers:webhookHeaders(sub,eventId,body,this.clock()),body,signal:this.controller.signal,beforeConnect:()=>this.authorized(this.store.message(row.id))});
      if(response.status<200||response.status>=300){
       if(response.status===410)this.store.set('subscription',{...sub,active:false});

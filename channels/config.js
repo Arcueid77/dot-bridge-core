@@ -4,6 +4,7 @@ import {readServiceKey} from '../router/auth.js';
 import {validHostname,boundedString} from '../router/live-contract.js';
 import {OWNER} from '../router/common.js';
 import {outboundEnabled} from './outbound.js';
+import {interactionPolicy} from './experience-policy.js';
 
 const absolute=value=>{if(typeof value!=='string'||!path.isAbsolute(value)||path.normalize(value)!==value||/[\x00-\x1f\x7f]/.test(value))throw Error('Protected absolute path required');return value;};
 function privateText(file,maxBytes){let bytes;try{bytes=readPrivateFile(absolute(file),{maxBytes});return new TextDecoder('utf-8',{fatal:true}).decode(bytes);}finally{bytes?.fill(0);}}
@@ -34,6 +35,7 @@ export function createChannelConfig(channel,env=process.env){
  const maxReplyText=channel.maxReplyText??20000;
  if(!Number.isSafeInteger(maxReplyText)||maxReplyText<1||maxReplyText>20000)throw Error('Invalid channel text bound');
  Object.assign(config,{credentials,storageKey,dbPath,bridgeLockDirectory,callbackHosts,callbackHostsLegacyAliasPresent:Boolean(env.MCP_CALLBACK_ALLOWED_HOSTS),maxReplyText,subscriptionTtlMs:604800000,retentionMs:604800000});
+ config.interaction=interactionPolicy(env.DOT_BRIDGE_INTERACTION_POLICY_FILE?JSON.parse(privateText(env.DOT_BRIDGE_INTERACTION_POLICY_FILE,65536)):{},channel);
  if(channel.webhookPort!==undefined){
   const rawWebhook=env[`${channel.envPrefix}_WEBHOOK_PORT`]??String(channel.webhookPort);
   if(!/^[1-9][0-9]{0,4}$/.test(rawWebhook)||Number(rawWebhook)>65535||Number(rawWebhook)===config.port)throw Error('Invalid webhook loopback port');

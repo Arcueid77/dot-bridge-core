@@ -7,7 +7,7 @@ installation and process composition. Never copy shared runtime code into a chan
 
 ```js
 export function createProvider({
-  credentials, state, onMessage, signal,
+  credentials, interaction, state, onMessage, signal,
   fetch = globalThis.fetch, WebSocket = globalThis.WebSocket
 }) {
   return {
@@ -234,3 +234,18 @@ rejection reason only after an explicit provider rejection. Core persists a
 5xx, timeouts, and arbitrary exceptions remain `uncertain`; no provider text or
 trace ID is stored in these status fields. Rejected work remains inspectable and
 cancellable, and its terminal text follows the seven-day retention policy.
+
+
+## Optional shared interaction hooks
+
+A component opts into shared tooling through immutable `channel.experience` metadata. `streaming` declares actual editable native replies; `groups` declares implemented group/topic normalization. Production credentials and protected policy still govern which sources are accepted. Legacy owner message references retain their existing hashes. Group references include the conversation and topic, avoiding Telegram's per-chat message-ID collisions.
+
+`interaction` is the validated protected policy, not message-controlled configuration. Providers may add `chatType`, `threadId`, `botMentioned`, `forwarded`, and bounded `quote: {text,truncated?}` to normalized messages. Verify mentions with official event fields, not matching a display name in text. Put actual private thread/recipient references in encrypted `replyContext`. Core independently rechecks the route before reads and writes.
+
+Optional provider hooks are `setFeedback({message,active,reference,authorize})`, `setTyping({message,active,authorize})`, `sendProgress({message,text,format?,reference,final?,idempotencyKey,authorize})`, and `finishProgress({message,reference,cancelled,authorize})`. Native progress references remain encrypted. A known reference is edited; an ambiguous create is never repeated. Core leases typing to actual message reads/begin calls and generated progress, cleans terminal feedback and records unknown finalizations.
+
+For native long text, `planTextReply(text)` returns at most 50 bounded `{text,format}` records; `format` is `text` or provider-generated safe `html`. `sendTextPart` re-derives its recipient from the stored source. Core persists plans, processing markers and each positive acknowledgement. A crash or error during one part remains uncertain and blocks replay. No caller can supply a recipient or arbitrary markup mode through the public final-reply tool.
+
+The shared context tool reads only preceding accepted rows in the same source conversation/topic and configured sender scope. It has independent message and text budgets, and never serializes private references, media Base64 or sender identities. Quotations and prior answers remain data. The original hosted dot's memory is managed by its platform; group-task instructions must forbid disclosing private memory.
+
+Owner IM maintenance has a separate encrypted durable control outbox. Exact direct-owner text commands can inspect state and cancel unsent bridge replies without invoking the model. Forwarded messages and group participants cannot grant management authority. Inflight/uncertain outcomes are retained. Existing Lark/QQ stores use the shared legacy adapter without replacing subscriptions or databases. Hosted-dot pause/reset/approval capabilities remain unavailable until an official interface for the existing dot is established.
