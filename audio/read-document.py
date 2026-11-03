@@ -46,7 +46,8 @@ try:
                     raise ValueError("xml size")
                 with archive.open(name) as source:
                     raw = source.read(MAX_XML + 1)
-                if len(raw) > MAX_XML or b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
+                markup = raw.replace(b"\x00", b"").upper()
+                if len(raw) > MAX_XML or b"<!DOCTYPE" in markup or b"<!ENTITY" in markup:
                     raise ValueError("xml")
                 root = ET.fromstring(raw)
                 part = "\n".join(node.text or "" for node in root.iter() if node.tag.rsplit("}", 1)[-1] in {"t", "v"})
