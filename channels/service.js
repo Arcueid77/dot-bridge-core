@@ -166,7 +166,9 @@ export class ChannelService{
   if(name===`begin_${this.config.channel.id}_reply`)return this.experience.begin(row);
   if(name===`append_${this.config.channel.id}_reply`)return this.experience.append(row,args);
   if(name===`cancel_${this.config.channel.id}_reply`)return this.experience.cancel(row);
-  if(name===`get_${this.config.channel.id}_reply_status`)return this.config.channel.experience?this.experience.status(row):{message_id:row.id,status:row.reply_state};
+  // Processing feedback is not a final send; existing task prechecks rely on
+  // this delivery state to decide whether they still owe the source one reply.
+  if(name===`get_${this.config.channel.id}_reply_status`)return {message_id:row.id,status:this.experience.get(row.id).streamState==='uncertain'?'uncertain':row.reply_state};
   if(name===`get_${this.config.channel.id}_attachment`)return this.readAttachment(row,args.attachment_index);
   if(name===`reply_${this.config.channel.id}_attachment`)return this.replyAttachment(row,args);
   const mediaReply=name===`reply_${this.config.channel.id}_media`;

@@ -29,6 +29,17 @@ const message=(id,chat='group-a',other={})=>({id,senderId:'member',conversationI
 const sub=(scope='owner')=>({name:'fixture.message.created',arguments:{conversation:scope},delivery:{mode:'webhook',url:'https://callback.example.com/current-dot',secret:'whsec_'+Buffer.alloc(32,33).toString('base64')},ttlMs:600000});
 const settle=async service=>{await service.working;await service.drain();};
 
+test('processing feedback does not make a final-delivery precheck suppress the only reply',async t=>{
+  const f=fixture(t,{feedback:{enabled:true}}),service=f.open();await service.subscribe(sub());
+  const id=await service.ingest(owner('delivery-precheck'));await settle(service);
+  const source=service.call('get_fixture_message',{message_id:id});assert.equal(source.reply_status,'none');
+  assert.equal(service.experience.status(service.store.message(id)).status,'processing');
+  const delivery=service.call('get_fixture_reply_status',{message_id:id});
+  assert.equal(delivery.status,'none','typing/processing feedback must not claim that the final reply is already being sent');
+  if(delivery.status==='none')service.call('reply_to_fixture',{message_id:id,text:'one final answer',idempotency_key:'one-final-answer'});
+  await settle(service);assert.equal(f.calls.length,1);assert.equal(service.call('get_fixture_reply_status',{message_id:id}).status,'sent');
+});
+
 test('protected policy rejects unused allowlists and groups default to disabled',()=>{
   const config={channel,credentials:{ownerId:'owner',conversationId:'dm'},interaction:interactionPolicy({},channel)};
   assert.equal(conversationRoute(config,message('1')),undefined);

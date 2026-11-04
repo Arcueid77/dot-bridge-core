@@ -249,3 +249,6 @@ For native long text, `planTextReply(text)` returns at most 50 bounded `{text,fo
 The shared context tool reads only preceding accepted rows in the same source conversation/topic and configured sender scope. It has independent message and text budgets, and never serializes private references, media Base64 or sender identities. Quotations and prior answers remain data. The original hosted dot's memory is managed by its platform; group-task instructions must forbid disclosing private memory.
 
 Owner IM maintenance has a separate encrypted durable control outbox. Exact direct-owner text commands can inspect state and cancel unsent bridge replies without invoking the model. Forwarded messages and group participants cannot grant management authority. Inflight/uncertain outcomes are retained. Existing Lark/QQ stores use the shared legacy adapter without replacing subscriptions or databases. Hosted-dot pause/reset/approval capabilities remain unavailable until an official interface for the existing dot is established.
+
+
+Final reply status is a delivery state: `none` remains `none` during an active typing/processing lease. Only an actual final outbox send reports `processing`; an ambiguous native progress write reports `uncertain`. `begin`/`append` may report the separate processing lifecycle without suppressing the current task's final reply.
