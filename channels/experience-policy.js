@@ -18,7 +18,7 @@ export function interactionPolicy(input = {}, channel = {}) {
   object(input,['version','feedback','context','replies','management','groups']);
   if(input.version!==undefined&&input.version!==1)fail();
   const feedback=input.feedback??{},context=input.context??{},replies=input.replies??{},management=input.management??{};
-  object(feedback,['enabled','reaction','typing','streaming','lease_seconds']);
+  object(feedback,['enabled','reaction','typing','streaming','lease_seconds','update_interval_ms','min_update_chars']);
   object(context,['max_messages','max_chars']);
   object(replies,['long_text']);object(management,['enabled']);
   const groups=input.groups??[];
@@ -33,7 +33,7 @@ export function interactionPolicy(input = {}, channel = {}) {
     return Object.freeze({conversationId:group.conversation_id,enabled:boolean(group.enabled,true),members,allowFrom:Object.freeze(allowFrom),mention:boolean(group.mention,true),autoReply,keywords:Object.freeze(keywords),replyInThread:boolean(group.reply_in_thread,true),contextScope:choice(group.context_scope,['sender','group'],'sender')});
   });
   return Object.freeze({
-    feedback:Object.freeze({enabled:boolean(feedback.enabled,false),reaction:boolean(feedback.reaction,true),typing:boolean(feedback.typing,true),streaming:boolean(feedback.streaming,true),leaseMs:integer(feedback.lease_seconds,10,300,60)*1000}),
+    feedback:Object.freeze({enabled:boolean(feedback.enabled,false),reaction:boolean(feedback.reaction,true),typing:boolean(feedback.typing,true),streaming:boolean(feedback.streaming,true),leaseMs:integer(feedback.lease_seconds,10,300,60)*1000,updateIntervalMs:integer(feedback.update_interval_ms,250,10000,1000),minUpdateChars:integer(feedback.min_update_chars,1,1000,40)}),
     context:Object.freeze({maxMessages:integer(context.max_messages,1,50,20),maxChars:integer(context.max_chars,1000,20000,12000)}),
     replies:Object.freeze({longText:choice(replies.long_text,['file','chunks'],'file')}),
     management:Object.freeze({enabled:boolean(management.enabled,!!channel.experience)}),groups:Object.freeze(rules),

@@ -34,6 +34,11 @@ Supported media channels also provide source-attachment replies: dot can reuse
 the current message's attachment by index without reconstructing Base64. Text
 files include bounded UTF-8/UTF-16 excerpts with explicit truncation; the original
 bytes remain available. Provider format and caption limits still apply.
+
+The shared runtime also provides encrypted, source-bound generated-file uploads,
+native choice dispatch for capable providers, and reminder pause/resume/history.
+Reminder schedules include weekdays and bounded fixed intervals. Native choices
+bind to the original actor, chat and topic and persist before acknowledgement.
 Each channel supplies only its platform protocol implementation, following the
 [provider contract](docs/channel-provider-contract.md). Media-capable providers
 expose bounded attachment reads and a single final text or media reply. Private

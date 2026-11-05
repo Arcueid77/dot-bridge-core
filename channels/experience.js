@@ -59,11 +59,14 @@ export class ChannelExperience {
         try{await service.provider.setTyping({message:row.message,active:typing,authorize});value={...this.get(row.id),typingAt:service.clock(),typingActive:typing,typingFailures:0};this.save(row.id,value);}catch{value={...this.get(row.id),typingAt:service.clock(),typingFailures:(value.typingFailures??0)+1};this.save(row.id,value);}
       }
       if(!terminal&&value.sequence>(value.appliedSequence??0)&&value.streamState!=='uncertain'&&typeof service.provider.sendProgress==='function'){
+        const elapsed=service.clock()-(value.progressAt??0);
+        const growth=value.text.length-(value.appliedChars??0);
+        if(value.appliedSequence>0&&(elapsed<policy.feedback.updateIntervalMs||growth<policy.feedback.minUpdateChars&&elapsed<policy.feedback.updateIntervalMs*2))continue;
         if(--budget<0)return;
         try{
           service.authorized(row);this.save(row.id,value,true);
           const reference=await service.provider.sendProgress({message:row.message,text:value.text,reference:value.streamReference,idempotencyKey:'progress:'+row.id,authorize});
-          value={...this.get(row.id),streamReference:reference,streamState:'active',appliedSequence:value.sequence};this.save(row.id,value,false);
+          value={...this.get(row.id),streamReference:reference,streamState:'active',appliedSequence:value.sequence,progressAt:service.clock(),appliedChars:value.text.length};this.save(row.id,value,false);
         }catch{this.save(row.id,{...this.get(row.id),streamState:'uncertain'},false);}
       }
       if(terminal&&value.streamReference&&value.phase!=='finished'&&value.streamState!=='uncertain'&&row.reply_state!=='uncertain'&&row.event_state!=='uncertain'&&(value.cleanupFailures??0)<3&&(value.cleanupNextAt??0)<=service.clock()&&typeof service.provider.finishProgress==='function'){
@@ -75,6 +78,15 @@ export class ChannelExperience {
   async sendFinal(row,reply,authorize) {
     const value=this.get(row.id);
     if(value.streamState==='uncertain')throw new Error('Uncertain progress is preserved');
+    if(reply.choices&&typeof this.service.provider.sendChoiceReply==='function'){
+      this.save(row.id,value,true);
+      try{
+        const receipt=await this.service.provider.sendChoiceReply({message:row.message,text:reply.prompt,choices:reply.choices,presentation:reply.presentation,reference:value.streamReference,idempotencyKey:reply.idempotencyKey,authorize});
+        this.service.choices.bindPrompt(row.id,receipt?.id);
+        this.save(row.id,{...value,phase:'finished',streamState:'final',lease:0},false);
+        return true;
+      }catch{this.save(row.id,{...value,streamState:'uncertain'},false);throw new Error('Choice reply acknowledgement is uncertain');}
+    }
     if(value.streamReference){
       if(reply.media||this.service.provider.canProgressFinal?.({text:reply.text,format:reply.format})===false){
         if(typeof this.service.provider.finishProgress!=='function')throw new Error('Progress cannot be replaced safely');

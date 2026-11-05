@@ -32,3 +32,23 @@ test('document revocation after extraction is not converted into a usable excerp
   let allowed=true;const read=createDocumentReader({trusted:file=>file,execute:async()=>{allowed=false;return Buffer.from('{"status":"complete","text":"private"}');}});
   await assert.rejects(read(Buffer.from('%PDF-synthetic'),{authorize:()=>{if(!allowed)throw Error('revoked');}}),/revoked/);
 });
+
+test('Markdown tables stay with their headers and oversized tables repeat headers on row boundaries',()=>{
+  const header='| name | state |\n| --- | --- |\n';
+  const table=header+Array.from({length:40},(_,index)=>`| row-${index} | done |\n`).join('');
+  const parts=splitMarkdown(table,240);
+  assert.ok(parts.length>2);
+  for(const part of parts){assert.ok(part.startsWith(header));assert.ok(part.length<=240);assert.match(part,/\|\n$/);}
+  for(let index=0;index<40;index++)assert.equal(parts.join('').split(`| row-${index} |`).length-1,1);
+  const short=header+'| short | done |\n';
+  const grouped=splitMarkdown('intro\n\n'+short+'\nending',240);
+  assert.ok(grouped.some(part=>part.includes(short)));
+});
+
+test('Markdown boundaries prefer paragraphs and preserve joined emoji when they fit the platform budget',()=>{
+  const family='👩‍👩‍👧‍👦';
+  const text=('paragraph '+family+' words\n\n').repeat(25);
+  const parts=splitMarkdown(text,190);
+  assert.equal(parts.join(''),text);
+  for(const part of parts){assert.ok(part.length<=190);assert.equal(part.startsWith('\u200d'),false);assert.equal(part.endsWith('\u200d'),false);}
+});

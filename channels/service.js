@@ -14,6 +14,8 @@ import {ChannelExperience} from './experience.js';
 import {ChannelManagement} from './management.js';
 import {ReplyParts} from './reply-parts.js';
 import {readableDocument} from './document-process.js';
+import {SourceUploads,isUploadTool} from './uploads.js';
+import {SourceChoices,isChoiceTool} from './choices.js';
 
 const denied=()=>new BridgeError('Message or subscription is unavailable',{status:403,code:-32012});
 const jsonBound=value=>{if(JSON.stringify(value).length>65536)throw new BridgeError('Provider message exceeds private metadata limit');return value;};
@@ -23,12 +25,16 @@ export class ChannelService{
   this.config=config;this.clock=clock;this.adapter=createChannelAdapter(config.channel);this.definitions=definitions(config.channel);this.controller=new AbortController();
   this.store=store??new ChannelStore(config);this.transport=transport??makeCallbackTransport({proxyEnv:process.env});this.closed=false;this.working=null;this.media=mediaCapabilities(config.channel);this.transcribe=transcribe;this.documentReader=documentReader;this.reads=new Set();
   try{
-   this.provider=createProvider({credentials:config.credentials,interaction:config.interaction??interactionPolicy({},config.channel),state:{get:k=>this.store.get(`provider:${k}`),set:(k,v)=>this.store.set(`provider:${k}`,v),delete:k=>this.store.delete(`provider:${k}`)},onMessage:m=>this.ingest(m),signal:this.controller.signal,...providerOptions});
+   this.provider=createProvider({credentials:config.credentials,interaction:config.interaction??interactionPolicy({},config.channel),state:{get:k=>this.store.get(`provider:${k}`),set:(k,v)=>this.store.set(`provider:${k}`,v),delete:k=>this.store.delete(`provider:${k}`)},onMessage:m=>this.ingest(m),onChoice:input=>{const result=this.choices.select(input);this.wake();return result;},signal:this.controller.signal,...providerOptions});
    if(!this.provider||['start','stop','status','sendReply'].some(k=>typeof this.provider[k]!=='function'))throw Error('Invalid provider contract');
    if((this.media.read.length&&typeof this.provider.readAttachment!=='function')||(this.media.reply.length&&typeof this.provider.sendMediaReply!=='function'))throw Error('Media capability does not match provider');
    this.experience=new ChannelExperience(this);
    this.management=new ChannelManagement(this);
    this.replyParts=new ReplyParts(this);
+   this.choices=new SourceChoices({db:this.store.db,seal:(v,a)=>this.store.seal(v,a),open:(v,a)=>this.store.open(v,a),clock,
+    authorize:id=>{if(this.closed)throw denied();const row=this.store.message(id);this.authorized(row);return row;}});
+   this.uploads=new SourceUploads({channel:config.channel.id,db:this.store.db,seal:(v,a)=>this.store.seal(v,a),open:(v,a)=>this.store.open(v,a),clock,mediaTypes:this.media.reply,
+    authorize:id=>{if(this.closed)throw denied();const row=this.store.message(id);this.authorized(row);return row;}});
    this.outbox=new OwnerOutbox({channel:config.channel.id,db:this.store.db,seal:(v,a)=>this.store.seal(v,a),open:(v,a)=>this.store.open(v,a),enabled:config.outboundEnabled===true,clock,
     available:()=>!this.closed&&this.provider.status()?.connected===true,send:typeof this.provider.sendOwnerMessage==='function'?args=>this.provider.sendOwnerMessage(args):undefined});
   }catch(e){this.store.close();throw e;}
@@ -160,7 +166,16 @@ export class ChannelService{
   args=this.adapter.validateToolArguments(name,args,true);
   if(name===this.definitions.backendSetupTool.name)return this.setup(args);
   if(isOutboundTool(this.config.channel.id,name)){const result=this.outbox.call(name,args);this.wake();return result;}
+  if(isUploadTool(this.config.channel.id,name))return this.uploads.call(name,args,{
+   queue:(id,media)=>this.call(`reply_${this.config.channel.id}_media`,{message_id:id,type:media.type,name:media.name,mime_type:media.mime_type,data:media.data,idempotency_key:media.idempotency_key}),
+   getReplyStatus:id=>this.call(`get_${this.config.channel.id}_reply_status`,{message_id:id})});
   this.store.expire(this.clock());const row=this.store.message(args.message_id);this.authorized(row);
+  if(isChoiceTool(this.config.channel.id,name)){
+   if(name===`get_${this.config.channel.id}_choice_result`)return this.choices.result(row.id);
+   for(const choice of args.choices){if(choice.command&&(row.message.senderId!==this.config.credentials.ownerId||routeOf(this.config,row.message)?.scope!=='owner'))throw denied();if(choice.reminder){if(row.message.senderId!==this.config.credentials.ownerId||routeOf(this.config,row.message)?.scope!=='owner')throw denied();const current=this.outbox.call(`get_${this.config.channel.id}_outbound`,{outbound_id:choice.reminder.outbound_id});if(current.revision!==choice.reminder.expected_revision)throw new BridgeError('Reminder changed; refresh before offering controls',{code:-32013,status:409});}}
+   const plan=this.choices.create({...row.message,id:row.id,expires:row.expires},args);
+   return this.queueFinalReply(row,{text:plan.text,prompt:plan.prompt,choices:plan.choices,presentation:plan.presentation,idempotencyKey:args.idempotency_key},hash(JSON.stringify(args)),false);
+  }
   if(name===`get_${this.config.channel.id}_message`){if(this.config.channel.experience)this.experience.begin(row);return this.message(row);}
   if(name===`get_${this.config.channel.id}_context`){const route=routeOf(this.config,row.message),policy=this.config.interaction??interactionPolicy({},this.config.channel);return {message_id:row.id,context_key:route.key,messages:this.store.context(row,{limit:Math.min(args.limit??policy.context.maxMessages,policy.context.maxMessages),maxChars:policy.context.maxChars})};}
   if(name===`begin_${this.config.channel.id}_reply`)return this.experience.begin(row);
@@ -171,6 +186,11 @@ export class ChannelService{
   if(name===`get_${this.config.channel.id}_reply_status`)return {message_id:row.id,status:this.experience.get(row.id).streamState==='uncertain'?'uncertain':row.reply_state};
   if(name===`get_${this.config.channel.id}_attachment`)return this.readAttachment(row,args.attachment_index);
   if(name===`reply_${this.config.channel.id}_attachment`)return this.replyAttachment(row,args);
+  if(name===`reply_to_${this.config.channel.id}`&&args.delivery_mode==='file'){
+   const bytes=Buffer.from(args.text,'utf8');
+   try{return this.call(`reply_${this.config.channel.id}_media`,{message_id:row.id,type:'file',name:'answer.md',mime_type:'text/markdown',data:bytes.toString('base64'),idempotency_key:args.idempotency_key});}
+   finally{bytes.fill(0);}
+  }
   const mediaReply=name===`reply_${this.config.channel.id}_media`;
   if(!mediaReply&&name!==`reply_to_${this.config.channel.id}`)throw denied();
   let reply;
@@ -181,9 +201,9 @@ export class ChannelService{
    reply={text:args.text??'',idempotencyKey:args.idempotency_key,media:{type:args.type,data:args.data,mimeType:args.mime_type,name:args.name}};
   }else{
    if(args.text.length>this.config.maxReplyText)throw new BridgeError('Reply exceeds this channel text limit');
-   reply={text:args.text,idempotencyKey:args.idempotency_key};
+   reply={text:args.text,idempotencyKey:args.idempotency_key,...(args.delivery_mode==='chunks'&&this.config.channel.id!=='line'?{deliveryMode:'chunks'}:{})};
   }
-  const digest=mediaReply?hash(JSON.stringify(reply)):hash(JSON.stringify({text:args.text,idempotency_key:args.idempotency_key}));
+  const digest=mediaReply?hash(JSON.stringify(reply)):hash(JSON.stringify({text:args.text,idempotency_key:args.idempotency_key,...(reply.deliveryMode?{delivery_mode:reply.deliveryMode}:{})}));
   if(this.experience.get(row.id).streamState==='uncertain')return {message_id:row.id,status:'uncertain'};
   return this.queueFinalReply(row,reply,digest,mediaReply);
  }
@@ -212,7 +232,7 @@ export class ChannelService{
  }
  wake(){if(this.closed||this.working)return;this.working=Promise.resolve().then(()=>this.drain()).catch(()=>{}).finally(()=>{this.working=null;});}
  async drain(){
-  if(this.closed)return;const now=this.clock();this.store.purge(now);this.store.db.prepare('DELETE FROM channel_management WHERE message_id NOT IN (SELECT id FROM channel_messages)').run();this.replyParts.cleanup();await this.experience.tick();await this.outbox.tick();
+  if(this.closed)return;const now=this.clock();this.store.purge(now);this.store.db.prepare('DELETE FROM channel_management WHERE message_id NOT IN (SELECT id FROM channel_messages)').run();this.uploads.purge();await this.choices.dispatch(message=>this.ingest(message),action=>this.outbox.call(`${action.action}_${this.config.channel.id}_scheduled_message`,{outbound_id:action.outbound_id,expected_revision:action.expected_revision}));this.replyParts.cleanup();await this.experience.tick();await this.outbox.tick();
   for(let i=0;i<20&&!this.closed;i++){
    const sub=this.subscription(),subscriptionId=sub?`${sub.id}:${sub.generation}`:null;
    const row=this.store.db.prepare("SELECT id FROM channel_messages WHERE expires>? AND ((reply_state='pending' AND (subscription_id=? OR EXISTS(SELECT 1 FROM channel_management WHERE message_id=channel_messages.id))) OR (subscription_id=? AND event_state='pending' AND reply_state='none' AND event_next_at<=?)) ORDER BY CASE reply_state WHEN 'pending' THEN 0 ELSE 1 END,created LIMIT 1").get(this.clock(),subscriptionId,subscriptionId,this.clock());

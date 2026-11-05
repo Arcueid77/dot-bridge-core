@@ -29,6 +29,18 @@ const message=(id,chat='group-a',other={})=>({id,senderId:'member',conversationI
 const sub=(scope='owner')=>({name:'fixture.message.created',arguments:{conversation:scope},delivery:{mode:'webhook',url:'https://callback.example.com/current-dot',secret:'whsec_'+Buffer.alloc(32,33).toString('base64')},ttlMs:600000});
 const settle=async service=>{await service.working;await service.drain();};
 
+test('native choice delivery binds its positive receipt before accepting a click',async t=>{
+  const f=fixture(t),sent=[];
+  const service=f.open({sendChoiceReply:async value=>{value.authorize();sent.push(value);return {id:'prompt-receipt',conversationId:'dm'};}});
+  await service.subscribe(sub());const id=await service.ingest(owner('choice-source'));await settle(service);
+  await service.call('reply_fixture_choices',{message_id:id,text:'Choose',choices:[{id:'one',label:'One'}],idempotency_key:'choose-one'});
+  await settle(service);assert.equal(sent.length,1);
+  const input={token:sent[0].choices[0].token,senderId:'owner',conversationId:'dm',message:owner('wrong-receipt')};
+  assert.equal(service.choices.select(input).accepted,false);
+  input.message=owner('prompt-receipt');assert.equal(service.choices.select(input).accepted,true);
+  await settle(service);await settle(service);assert.equal(f.events.length,2);
+});
+
 test('processing feedback does not make a final-delivery precheck suppress the only reply',async t=>{
   const f=fixture(t,{feedback:{enabled:true}}),service=f.open();await service.subscribe(sub());
   const id=await service.ingest(owner('delivery-precheck'));await settle(service);
@@ -103,7 +115,9 @@ test('progress acknowledgements do not overwrite newer generated frames while ne
   service.call('append_fixture_reply',{message_id:id,sequence:1,text:'one'});await new Promise(resolve=>setImmediate(resolve));
   service.call('append_fixture_reply',{message_id:id,sequence:2,text:'one two'});acknowledge({id:'native'});await service.working;
   const state=service.experience.get(id);assert.equal(state.sequence,2);assert.equal(state.text,'one two');assert.equal(state.appliedSequence,1);
-  service.provider.sendProgress=async()=>({id:'native'});await settle(service);assert.equal(service.experience.get(id).appliedSequence,2);
+  service.provider.sendProgress=async()=>({id:'native'});await settle(service);assert.equal(service.experience.get(id).appliedSequence,1);
+  const now=Date.now();service.clock=()=>now+2100;
+  await settle(service);assert.equal(service.experience.get(id).appliedSequence,2);
 });
 
 test('a configured long reply persists each acknowledged native part and preserves an ambiguous remainder across restart',async t=>{

@@ -4,7 +4,8 @@ export class ReplyParts {
     this.store.db.exec("CREATE TABLE IF NOT EXISTS channel_reply_parts(message_id TEXT NOT NULL,ordinal INTEGER NOT NULL,payload TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(message_id,ordinal)); UPDATE channel_reply_parts SET state='uncertain' WHERE state='processing';");
   }
   prepare(row,reply) {
-    if(reply.media||this.service.experience.policy.replies.longText!=='chunks'||typeof this.service.provider.planTextReply!=='function')return;
+    if(reply.media||reply.choices||(reply.deliveryMode??this.service.experience.policy.replies.longText)!=='chunks')return;
+    if(typeof this.service.provider.planTextReply!=='function'){if(reply.deliveryMode)throw Error('Native text chunks are unavailable');return;}
     const parts=this.service.provider.planTextReply(reply.text);
     if(!Array.isArray(parts)||!parts.length||parts.length>50)throw Error('Invalid bounded reply plan');
     if(parts.length===1)return;

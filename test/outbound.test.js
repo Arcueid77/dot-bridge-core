@@ -28,8 +28,8 @@ test('disabled sends are refused; QQ and Weixin expose the same owner-only outbo
   const f=fixture(t,{enabled:false});
   assert.equal(f.box.call('check_telegram_outbound',{}).reason,'disabled');
   assert.throws(()=>f.box.call('send_telegram_message',send()));assert.equal(await f.box.tick(),false);assert.equal(f.sent.length,0);
-  assert.equal(outboundDefinitions('qq').length,7);
-  assert.equal(outboundDefinitions('weixin').length,7);
+  assert.equal(outboundDefinitions('qq').length,10);
+  assert.equal(outboundDefinitions('weixin').length,10);
 });
 
 test('Weixin platform rejection persists across restart without retry or changing incoming subscriptions',async t=>{
