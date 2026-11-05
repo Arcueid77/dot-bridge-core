@@ -1,6 +1,8 @@
 # Shared callback transport
 
-Dependency-free ESM transport used by the QQ bridge and its sibling Lark bridge.
+[中文概要](#中文概要)
+
+Canonical provider-independent ESM callback transport for the registered bridges.
 The ordinary entry preserves HTTPS hostname checks, all-answer public-address
 validation, direct address pinning, bounds, cancellation and no redirect/retry.
 A separate explicit owner-message experiment uses the existing selected proxy
@@ -9,13 +11,13 @@ starts a service, logs payloads, or creates persistent access.
 
 ## Distribution and imports
 
-Copy/install package.json and its files allowlist together. dot-bridge-core owns this canonical source. IM repositories install the reviewed
+dot-bridge-core owns this canonical source. IM repositories install the reviewed
 @dot-bridge/core release and import @dot-bridge/core/transport; they do not require
 a sibling checkout or maintain independent source copies.
 
-- @dot-bridge/callback-transport: ordinary factory, status schema and signature helpers
-- @dot-bridge/callback-transport/owner-message-experiment: explicitly bounded owner experiment
-- @dot-bridge/callback-transport/owner-scoped-proxy: explicit continuous owner policy
+- @dot-bridge/core/transport: ordinary factory, status schema and signature helpers
+- @dot-bridge/core/transport/experimental/owner-message.js: explicitly bounded owner experiment
+- @dot-bridge/core/transport/owner-scoped.js: explicit continuous owner policy
 
 The tested integration uses Node 24.15–24.x. The shared ordinary transport needs
 Node 22 or newer; native proxy/owner integration is tested on Node 24.19.0.
@@ -184,3 +186,8 @@ certificates. They never contact providers or real callbacks. Native TLS tests
 need an installed OpenSSL executable. Source-copy checks preserve original source
 hashes and record each reviewed packaged adaptation; no runtime diagnostic or
 private deployment material belongs in the package.
+
+
+## 中文概要
+
+回调传输由 `dot-bridge-core` 统一维护，渠道使用固定的 `@dot-bridge/core/transport`。标准模式保留 HTTPS、公网 DNS／IP、原域名 TLS、超时与取消、禁止重定向及未知结果不自动重发的规则。显式 owner 代理实验与标准模式分别配置；主机原有的必要代理按真实网络策略处理。部署入口见 [core 中文说明](../../README.zh-CN.md)。

@@ -1,5 +1,7 @@
 # dot-bridge-core
 
+[简体中文](README.zh-CN.md) · [English](README.md)
+
 Canonical provider-independent shared code for the existing dot bridges. Node
 >=24.15 and <25. The repository builds the versioned `@dot-bridge/core` package;
 deployments install its reviewed tarball without cloning this source repository.
@@ -109,14 +111,14 @@ and set `DOT_BRIDGE_AUDIO_GUARD=/protected/runtime/no-core-dump.so`. It must hav
 the same root-owned protection. This constructor makes each audio subprocess
 nondumpable after exec; a zero core-size limit alone is insufficient on systems
 with piped crash collectors. Missing protection makes transcription unavailable.
-Use the existing private `BRIDGE_LOCK_DIRECTORY` for both backends; one
+Use the existing private `BRIDGE_LOCK_DIRECTORY` across enabled backends; one
 nonblocking lock serializes recognition across them. FFmpeg, prlimit and flock
 must be installed under `/usr/bin`. No API key or external transcription
 service is used. The host's original dot still generates the response.
 
 Audio travels through bounded memory pipes, never a temporary media file.
 Recognition uses one CPU thread, a virtual address-space ceiling of 1.5 GiB and at most
-28 seconds of wall time. Input is limited to 8 MiB and 120 seconds; decoded
+28 seconds of wall time. The transcription primitive accepts up to 8 MiB and 120 seconds; channel attachment RPCs retain their stricter 5 MiB limit. Decoded
 silence, busy/absent runtimes, unsupported formats and timeouts return
 `extraction_status:unsupported`. The bridge keeps the native audio result and
 must ask for clearer/shorter speech or text when neither audio nor transcription
@@ -133,3 +135,10 @@ these are not required by Feishu or the persistent VPS deployment.
 Shared interaction modules add bounded processing feedback, genuine progressive edits, isolated recent context, safe Markdown rendering, protected PDF/Office excerpts, durable native reply parts and owner IM management. Hosted-dot controls remain on the original platform.
 
 [简体中文](README.zh-CN.md) · [English](README.md)
+
+
+## Processing and final delivery
+
+For the shared channel runtime, `get_<channel>_reply_status` reports final delivery. It remains `none` during a typing/processing lease until a final answer is queued. `begin`/`append` can report the separate processing lifecycle; finalize the current flow once. An ambiguous native progress write remains `uncertain`. Telegram/Discord append cumulative text; the established Lark adapter appends deltas. See the [provider contract](docs/channel-provider-contract.md).
+
+Protected PDF/Office extraction uses the packaged `audio/read-document.py` worker through root-owned Python/prlimit and the existing guard. The reviewed public runtime tree, including that worker, must be root-owned and service-user read-only; private data remains owned by the service account. The host supplies Python 3 with `pypdf` for PDF text. The bounded worker keeps original attachments available when extraction is unavailable.

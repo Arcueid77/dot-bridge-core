@@ -1,8 +1,11 @@
 # Native Windows private storage
 
-This package adds the Windows branch used by the sibling QQ/Lark bridges, the
-aggregator and finite-window supervisor. Existing Linux descriptor-relative
-branches remain available. It has no provider, callback, account or network API.
+[中文概要](#中文概要)
+
+This canonical module in dot-bridge-core supplies private-file checks to registered
+IM bridges and the router. Providers consume the pinned @dot-bridge/core/platform
+export. Linux descriptor-relative checks and the Windows branch remain available;
+the finite-window supervisor is a historical development consumer.
 
 Use Node 24.15+ in major 24 and an existing trusted Python 3.10+ interpreter.
 `DOT_BRIDGE_PYTHON` selects its absolute path. If absent, standalone Node tools
@@ -87,3 +90,8 @@ Win32 contracts used here: [CreateFile](https://learn.microsoft.com/en-us/window
 [DuplicateHandle](https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-duplicatehandle),
 [LockFileEx](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex),
 and [Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).
+
+
+## 中文概要
+
+共享平台检查由 `dot-bridge-core` 统一维护，各渠道消费固定的 `@dot-bridge/core/platform` 包。Linux 使用受保护的描述符与属主检查，Windows 使用 NTFS、当前用户 SID、私有 DACL 和已安装的 Python；`DOT_BRIDGE_PYTHON` 指定解释器绝对路径。保留单实例锁、SQLite 及 WAL／SHM 的路径和权限检查，按固定版本升级。现行部署入口见 [core 中文说明](../../README.zh-CN.md)。

@@ -15,8 +15,9 @@
     },
     {
       "file": "packages/dot-bridge-platform/README.md",
-      "sha256": "0ccb321100251c6695df0056fcf5ba731d0db045adfbece665f7c686921af9b5",
-      "adaptation": null
+      "sha256": "a9074eab4f329dbb67cd40ecebfbccd792c343da07303fd71bbce0e412e44087",
+      "adaptation": "Document canonical package consumption and add a Chinese reference summary; runtime source unchanged.",
+      "source_sha256": "0ccb321100251c6695df0056fcf5ba731d0db045adfbece665f7c686921af9b5"
     },
     {
       "file": "packages/dot-bridge-platform/supervised-stop.js",
@@ -80,8 +81,8 @@
     },
     {
       "file": "packages/dot-bridge-transport/README.md",
-      "sha256": "612df213e9567bfa469574299354e5a29ab79094abd65e30ad280e7f7a17a970",
-      "adaptation": "Distribution and verification documentation only; shared runtime source unchanged.",
+      "sha256": "e527f992e1cccf7eadefcea97c729a9ec40a3fba00bcf3cd174934e38a53f119",
+      "adaptation": "Document canonical package consumption and add a Chinese reference summary; runtime source unchanged.",
       "source_sha256": "c54046337e61bb2542660fe8337409ff77f5a74482121fbfad56c5999497a2ae"
     },
     {
