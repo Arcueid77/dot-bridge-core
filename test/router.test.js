@@ -8,6 +8,7 @@ import {registerAdapters} from '../router/registry.js';
 import {readConfig,validateConfig} from '../router/config.js';
 import {createApp} from '../router/server.js';
 import {toolCatalog,eventCatalog} from '../router/catalog.js';
+import {catalogFingerprint} from '../router/runtime.js';
 import {validateEventCall,validateToolCall} from '../router/live-contract.js';
 import {OWNER,VERSION,SERVICE_HEADER,metadata,object} from '../router/common.js';
 import {privateMkdtempSync,cleanupPrivateFixture,beforeFixtureCleanup} from '../packages/dot-bridge-platform/test-fixtures.js';
@@ -34,6 +35,22 @@ test('one registered channel needs only its own port and key; omitted providers 
  const f=fixture(t);assert.deepEqual(Object.keys(f.config.channels),['fixture']);assert.equal(toolCatalog(f.config).length,2);assert.equal(eventCatalog(f.config).length,1);
  for(const extra of [{QQ_SERVICE_KEY_FILE:f.files[2]},{LARK_MCP_PORT:'8787'},{FIXTURE_APP_ID:'should-not-be-read'},{TUNNEL_CHANNELS:'missing'},{TUNNEL_LIVE_CHANNELS:'fixture,missing'}])assert.throws(()=>readConfig({...f.env,...extra},[adapter()]));
  assert.throws(()=>validateToolCall(f.config,{name:'reply_to_qq',arguments:{}}));
+});
+
+test('runtime source and catalog metadata require service authentication and reject browser origins',async t=>{
+ const f=fixture(t),env={...f.env,TUNNEL_SERVICE_OPERATION:'readiness'};delete env.TUNNEL_LIVE_CHANNELS;
+ const config=readConfig(env,[adapter()]),app=createApp(config);beforeFixtureCleanup(t,()=>app.close());const address=await app.listen(0);
+ const get=headers=>new Promise((resolve,reject)=>{
+  const request=http.get({host:'127.0.0.1',port:address.port,path:'/runtime',headers},response=>{
+   const chunks=[];response.on('data',chunk=>chunks.push(chunk));response.on('end',()=>resolve({status:response.statusCode,body:JSON.parse(Buffer.concat(chunks))}));
+  });request.on('error',reject);
+ });
+ assert.equal((await get({})).status,401);
+ assert.equal((await get({[SERVICE_HEADER]:f.keys[0],origin:'https://example.com'})).status,403);
+ const result=await get({[SERVICE_HEADER]:f.keys[0]});assert.equal(result.status,200);
+ assert.equal(result.body.catalog.fingerprint,catalogFingerprint(toolCatalog(config),eventCatalog(config)));
+ assert.equal(result.body.catalog.upstream_verified,false);
+ assert.equal(JSON.stringify(result.body).includes(f.keys[0]),false);
 });
 test('configuration is a frozen snapshot and cannot add channels, scopes or larger limits',t=>{
  const supplied=adapter(),f=fixture(t,[supplied]);supplied.scopes.push('configured');supplied.liveTools.push({...supplied.liveTools[0],name:'new_tool'});supplied.limits.request=12582912;

@@ -252,3 +252,9 @@ Owner IM maintenance has a separate encrypted durable control outbox. Exact dire
 
 
 Final reply status is a delivery state: `none` remains `none` during an active typing/processing lease. Only an actual final outbox send reports `processing`; an ambiguous native progress write reports `uncertain`. `begin`/`append` may report the separate processing lifecycle without suppressing the current task's final reply.
+
+Providers with a native processing card or stream may implement `beginProgress` together with `sendProgress` and `finishProgress`. The processing cue is stored separately from model-generated text. Its unknown acknowledgement blocks final sends until reviewed. Media replacement closes the processing cue before delivering the one final attachment.
+
+`SourceSpeech` synthesizes locally with bounded stdin/PCM pipes and the protected audio lock. Server-produced voice metadata includes actual duration, waveform and encoded-byte checksum. Public media tools cannot supply it. A provider may render this trusted result as a native voice attachment. General uploaded audio retains its established attachment behavior.
+
+`ConversationQueue` and `LegacyConversationQueue` preserve source records, original subscription generations and one durable anchor. Mutations of a merged child are refused. New media kinds are declared per adapter; `video` and `sticker` are passed as bounded resources. Telegram implements native video/sticker sends; Discord sends sticker images as attachments and refreshes the verified original message before reading its CDN resource.

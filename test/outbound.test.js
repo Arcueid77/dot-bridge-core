@@ -28,8 +28,8 @@ test('disabled sends are refused; QQ and Weixin expose the same owner-only outbo
   const f=fixture(t,{enabled:false});
   assert.equal(f.box.call('check_telegram_outbound',{}).reason,'disabled');
   assert.throws(()=>f.box.call('send_telegram_message',send()));assert.equal(await f.box.tick(),false);assert.equal(f.sent.length,0);
-  assert.equal(outboundDefinitions('qq').length,10);
-  assert.equal(outboundDefinitions('weixin').length,10);
+  assert.equal(outboundDefinitions('qq').length,11);
+  assert.equal(outboundDefinitions('weixin').length,11);
 });
 
 test('Weixin platform rejection persists across restart without retry or changing incoming subscriptions',async t=>{
@@ -143,4 +143,24 @@ test('disabled restart holds saved work without sending; reenabling still skips 
  const f=fixture(t),saved=f.box.call('schedule_telegram_message',once());await f.box.close();
  const disabled=new OwnerOutbox({...f.settings,enabled:false});f.time('2026-11-02T01:01:00Z');await disabled.tick();assert.equal(disabled.call('get_telegram_outbound',{outbound_id:saved.outbound_id}).status,'active');assert.equal(f.sent.length,0);
  f.time('2026-11-02T01:06:00Z');const enabled=new OwnerOutbox(f.settings);await enabled.tick();assert.equal(enabled.call('get_telegram_outbound',{outbound_id:saved.outbound_id}).status,'expired');assert.equal(f.sent.length,0);
+});
+
+test('only an explicitly confirmed known rejection can retry the same one-time intent', async t => {
+  let attempts=0;
+  const f=fixture(t,{send:async()=>{if(++attempts===1)throw new OutboundRejection('provider_rejected',{providerCode:-2});}});
+  const saved=f.box.call('send_telegram_message',send());
+  await f.box.tick();
+  const args={outbound_id:saved.outbound_id,expected_revision:1,confirm:true};
+  assert.equal(f.box.call('get_telegram_outbound',{outbound_id:saved.outbound_id}).provider_code,-2);
+  assert.throws(()=>f.box.call('retry_telegram_outbound',{...args,confirm:false}));
+  const retried=f.box.call('retry_telegram_outbound',args);
+  assert.equal(retried.outbound_id,saved.outbound_id);assert.equal(retried.revision,2);
+  assert.equal(f.box.call('retry_telegram_outbound',args).revision,2);
+  f.time(Date.parse(retried.send_at));await f.box.tick();
+  assert.equal(attempts,2);assert.equal(f.box.call('get_telegram_outbound',{outbound_id:saved.outbound_id}).status,'sent');
+  assert.equal(f.box.call('get_telegram_reminder_history',{outbound_id:saved.outbound_id}).attempts.length,2);
+  assert.throws(()=>f.box.call('retry_telegram_outbound',{...args,expected_revision:2}));
+  const unknown=fixture(t,{send:async()=>{throw Error('lost acknowledgement');}});
+  const pending=unknown.box.call('send_telegram_message',send());await unknown.box.tick();
+  assert.throws(()=>unknown.box.call('retry_telegram_outbound',{outbound_id:pending.outbound_id,expected_revision:1,confirm:true}));
 });

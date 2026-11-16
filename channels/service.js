@@ -18,17 +18,19 @@ import {SourceUploads,isUploadTool} from './uploads.js';
 import {SourceChoices,isChoiceTool} from './choices.js';
 import {TaskLedger,isTaskTool} from './tasks.js';
 import {ConversationQueue} from './conversation-queue.js';
+import {SourceSpeech,isSpeechTool,validateSpeechArguments} from './speech.js';
 
 const denied=()=>new BridgeError('Message or subscription is unavailable',{status:403,code:-32012});
 const jsonBound=value=>{if(JSON.stringify(value).length>65536)throw new BridgeError('Provider message exceeds private metadata limit');return value;};
 function webhookHeaders(sub,id,body,now){const key=decodeWebhookKey(sub.secret);try{return signedHeaders({id:sub.id,key},id,body,now);}finally{key.fill(0);}}
 export class ChannelService{
- constructor(config,{createProvider,store,transport,clock=Date.now,providerOptions={},transcribe=transcribeAudio,documentReader=readableDocument}={}){
+ constructor(config,{createProvider,store,transport,clock=Date.now,providerOptions={},transcribe=transcribeAudio,documentReader=readableDocument,speechSynthesizer}={}){
   this.config=config;this.clock=clock;this.adapter=createChannelAdapter(config.channel);this.definitions=definitions(config.channel);this.controller=new AbortController();
   this.store=store??new ChannelStore(config);this.transport=transport??makeCallbackTransport({proxyEnv:process.env});this.closed=false;this.working=null;this.media=mediaCapabilities(config.channel);this.transcribe=transcribe;this.documentReader=documentReader;this.reads=new Set();
   try{
-   this.provider=createProvider({credentials:config.credentials,interaction:config.interaction??interactionPolicy({},config.channel),state:{get:k=>this.store.get(`provider:${k}`),set:(k,v)=>this.store.set(`provider:${k}`,v),delete:k=>this.store.delete(`provider:${k}`)},onMessage:m=>this.ingest(m),onChoice:input=>{const result=this.choices.select(input);this.wake();return result;},signal:this.controller.signal,...providerOptions});
+   this.provider=createProvider({credentials:config.credentials,nativeVoice:config.nativeVoice===true,interaction:config.interaction??interactionPolicy({},config.channel),state:{get:k=>this.store.get(`provider:${k}`),set:(k,v)=>this.store.set(`provider:${k}`,v),delete:k=>this.store.delete(`provider:${k}`)},onMessage:m=>this.ingest(m),onChoice:input=>{const result=this.choices.select(input);this.wake();return result;},signal:this.controller.signal,...providerOptions});
    if(!this.provider||['start','stop','status','sendReply'].some(k=>typeof this.provider[k]!=='function'))throw Error('Invalid provider contract');
+   if (typeof this.provider.beginProgress === 'function' && ['sendProgress','finishProgress'].some(key => typeof this.provider[key] !== 'function')) throw new Error('Native processing requires a complete reply lifecycle.');
    if((this.media.read.length&&typeof this.provider.readAttachment!=='function')||(this.media.reply.length&&typeof this.provider.sendMediaReply!=='function'))throw Error('Media capability does not match provider');
    this.experience=new ChannelExperience(this);
    this.management=new ChannelManagement(this);
@@ -39,15 +41,40 @@ export class ChannelService{
     authorize:id=>{if(this.closed)throw denied();const row=this.store.message(id);this.authorized(row);return row;}});
    this.tasks = new TaskLedger({channel: config.channel.id, db: this.store.db,
      seal: (value, aad) => this.store.seal(value, aad), open: (value, aad) => this.store.open(value, aad), clock,
-     authorizeSource: id => {
+     authorizeSource: (id, {ownerLookup = false} = {}) => {
        const row = this.store.message(id);
-       this.authorized(row, {allowExpired: true});
+       if (ownerLookup) {
+         if (!row || row.message.senderId !== config.credentials.ownerId ||
+             row.message.conversationId !== config.credentials.conversationId || row.message.chatType === 'group') throw denied();
+       } else this.authorized(row, {allowExpired: true});
        return {deadline: row.expires, retainUntil: row.created + config.retentionMs,
          scope: routeOf(config, row.message).scope,
          replyState: this.experience.get(id).streamState === 'uncertain' ? 'uncertain' : row.reply_state};
      }});
    this.queue = new ConversationQueue(this);
+   this.speech = new SourceSpeech({channel: config.channel, synthesizer: speechSynthesizer, signal: this.controller.signal,
+     authorizeRead: id => this.authorized(this.store.message(id), {allowExpired: true}),
+     authorize: id => {this.authorized(this.store.message(id));this.queue.assertWritable(id);},
+     existing: id => {
+       const row = this.store.message(id);
+       return row.reply ? {digest: this.store.open(row.reply, 'reply:' + id).speechRequestDigest} : undefined;
+     },
+     queue: (id, audio) => {
+       const row = this.store.message(id), reply = {text: '', idempotencyKey: audio.idempotencyKey,
+         speechRequestDigest: audio.speechRequestDigest,
+         media: {type: audio.type, data: audio.data.toString('base64'), mimeType: audio.mimeType, name: audio.name,
+           ...(audio.voice ? {voice: audio.voice} : {})}};
+       this.provider.validateMediaReply?.({media: audio, text: ''});
+       return this.queueFinalReply(row, reply, audio.speechRequestDigest, true);
+     },
+     status: id => this.replyStatus(id), begin: id => this.tasks.begin(id),
+     recordResult: (id, text, key) => {const task = this.tasks.begin(id);if (!task.result_available) this.tasks.save(task.task_id, text, key);},
+     providerReady: () => {
+       const status = this.provider.status();
+       return this.media.reply.includes(this.speech.profile.type) && typeof this.provider.sendMediaReply === 'function' && (status.mediaPublisherRequired !== true || status.mediaPublisherConfigured === true);
+     }});
    this.outbox=new OwnerOutbox({channel:config.channel.id,db:this.store.db,seal:(v,a)=>this.store.seal(v,a),open:(v,a)=>this.store.open(v,a),enabled:config.outboundEnabled===true,clock,
+    inspectProvider:typeof this.provider.outboundDiagnostics==='function'?()=>this.provider.outboundDiagnostics():undefined,
     available:()=>!this.closed&&this.provider.status()?.connected===true,send:typeof this.provider.sendOwnerMessage==='function'?args=>this.provider.sendOwnerMessage(args):undefined});
   }catch(e){this.store.close();throw e;}
  }
@@ -134,6 +161,10 @@ export class ChannelService{
   });return {};
  }
  message(row){const m=row.message,route=routeOf(this.config,m);return {message_id:row.id,conversation:route?.scope??'owner',text:this.queue.text(row),attachments:m.attachments,...(this.queue.members(row.id).length>1?{source_message_ids:this.queue.members(row.id)}:{}),reply_deadline:new Date(row.expires).toISOString(),reply_status:this.experience.get(this.queue.anchor(row.id)).streamState==='uncertain'?'uncertain':this.queue.status(row),...(this.config.channel.experience?{context_key:route.key,...(m.quote?.text?{quote:{text:m.quote.text,truncated:m.quote.truncated===true}}:{})}:{})};}
+ replyStatus(id) {
+   const row = this.store.message(id);
+   return {message_id: id, status: this.experience.get(this.queue.anchor(id)).streamState === 'uncertain' ? 'uncertain' : this.queue.status(row)};
+ }
  withAttachment(row,index,consume,{forReply=false}={}){
   if(this.reads.size)throw new BridgeError('An attachment is already being read',{status:429,code:-32013});
   const attachment=row.message.attachments[index];
@@ -182,6 +213,10 @@ export class ChannelService{
    queue:(id,media)=>this.call(`reply_${this.config.channel.id}_media`,{message_id:id,type:media.type,name:media.name,mime_type:media.mime_type,data:media.data,idempotency_key:media.idempotency_key}),
    getReplyStatus:id=>this.call(`get_${this.config.channel.id}_reply_status`,{message_id:id})});
   if (isTaskTool(this.config.channel.id, name)) return this.tasks.call(name, args);
+  if (isSpeechTool(this.config.channel, name)) {
+    validateSpeechArguments(this.config.channel, name, args);
+    return name === `check_${this.config.channel.id}_speech` ? this.speech.check() : this.speech.reply(args);
+  }
   this.store.expire(this.clock());const row=this.store.message(args.message_id);this.authorized(row);
   if(isChoiceTool(this.config.channel.id,name)){
    if(name===`get_${this.config.channel.id}_choice_result`)return this.choices.result(row.id);
@@ -196,7 +231,7 @@ export class ChannelService{
   if(name===`cancel_${this.config.channel.id}_reply`){this.queue.assertWritable(row.id);return this.experience.cancel(row);}
   // Processing feedback is not a final send; existing task prechecks rely on
   // this delivery state to decide whether they still owe the source one reply.
-  if(name===`get_${this.config.channel.id}_reply_status`)return {message_id:row.id,status:this.experience.get(this.queue.anchor(row.id)).streamState==='uncertain'?'uncertain':this.queue.status(row)};
+  if(name===`get_${this.config.channel.id}_reply_status`)return this.replyStatus(row.id);
   if(name===`get_${this.config.channel.id}_attachment`)return this.readAttachment(row,args.attachment_index);
   if(name===`reply_${this.config.channel.id}_attachment`)return this.replyAttachment(row,args);
   if(name===`reply_to_${this.config.channel.id}`&&args.delivery_mode==='file'){
@@ -222,6 +257,7 @@ export class ChannelService{
  }
  queueFinalReply(row,reply,digest,mediaReply){
   this.queue.assertWritable(row.id);
+  if(this.experience.get(row.id).streamState==='uncertain')return {message_id:row.id,status:'uncertain'};
   this.store.tx(()=>{
    const current=this.store.message(row.id);this.authorized(current);
    if(current.reply_digest){if(current.reply_digest!==digest)throw new BridgeError('A different final reply already exists',{status:409,code:-32013});return;}
@@ -284,5 +320,5 @@ export class ChannelService{
   }
  }
  async start(){await this.provider.start();if(this.closed)return;this.timer=setInterval(()=>this.wake(),1000);this.timer.unref();this.wake();}
- async close(){if(this.closing)return this.closing;this.closing=(async()=>{this.closed=true;clearInterval(this.timer);this.controller.abort();let failure;try{await this.provider.stop();}catch(e){failure=e;}try{await Promise.allSettled([...this.reads]);await this.working;await this.outbox.close();}finally{this.store.close();}if(failure)throw failure;})();return this.closing;}
+ async close(){if(this.closing)return this.closing;this.closing=(async()=>{this.closed=true;clearInterval(this.timer);this.controller.abort();let failure;try{await this.provider.stop();}catch(e){failure=e;}try{await Promise.allSettled([...this.reads]);await this.working;await this.speech.close();await this.outbox.close();}finally{this.store.close();}if(failure)throw failure;})();return this.closing;}
 }

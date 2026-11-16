@@ -9,6 +9,7 @@ import { validateMcp } from './protocol.js';
 import { createUpstreamClient } from './upstream.js';
 import { toolCatalog, eventCatalog } from './catalog.js';
 import { retainValidationHeaders } from './transport-headers.js';
+import {runtimeInfo, catalogFingerprint} from './runtime.js';
 function json(res, status, value, headers = {}) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff', Connection: 'close', ...headers });
@@ -59,6 +60,7 @@ export function createApp(input, { approvedLive = false } = {}) {
   if (hashes.some((value, i) => hashes.slice(i + 1).some(other => timingSafeEqual(value, other)))) throw new Error('Service credentials must be independent');
   const authenticate = createAuthenticator(ingress); ingress = undefined;
   const upstream = createUpstreamClient(config, keys, {approvedLive});
+  const runtime = runtimeInfo();
   const sockets = new Set(); let stopping = false, closing, inFlight = 0, windowStart = Date.now(), count = 0;
   const catalog = () => ({ ttlMs: 0, cacheScope: 'private' });
   async function rpc(method, params) {
@@ -88,6 +90,13 @@ export function createApp(input, { approvedLive = false } = {}) {
       checkHeaders(req, server.address()?.port);
       if (req.method === 'GET' && req.url === '/healthz') return json(res, 200, config.operation === 'live' ? {status:'ok',readiness_only:false,live_routing_enabled:true,end_to_end_verified:false} : {status:'ok',readiness_only:true,real_message_forwarding:false});
       if (req.method === 'GET' && req.url === '/readyz') return json(res, 503, { ready: false, ready_for_delivery: false, end_to_end_verified: false });
+      if (req.method === 'GET' && req.url === '/runtime') {
+        authenticate(req);
+        if (config.operation === 'live') await upstream.verifyCatalogs();
+        const tools = toolCatalog(config), events = eventCatalog(config);
+        return json(res, 200, {...runtime, catalog: {tools: tools.length, events: events.length,
+          fingerprint: catalogFingerprint(tools, events), upstream_verified: config.operation === 'live'}});
+      }
       if (req.url !== '/mcp') return json(res, 404, { error: 'Not found' });
       if (req.method !== 'POST') return json(res, 405, { error: 'POST required' }, { Allow: 'POST' });
       authenticate(req);

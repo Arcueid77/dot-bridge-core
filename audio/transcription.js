@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {setPriority} from 'node:os';
+import {pcm16Wave} from './wav.js';
 
 const INPUT_LIMIT=8*1024*1024, PCM_LIMIT=16000*2*120, TEXT_LIMIT=12000;
 const unavailable=()=>({extraction_status:'unsupported'});
@@ -34,6 +35,7 @@ function lockFile(env){
   catch(error){fs.closeSync(fd);throw error;}
   return {fd,close:()=>fs.closeSync(fd)};
 }
+export {lockFile as openAudioWorkLock};
 function run(command,args,input,{limit,timeout,fd,guard}){
   return new Promise((resolve,reject)=>{
     let child,failed=false,size=0;const chunks=[];
@@ -54,11 +56,6 @@ function run(command,args,input,{limit,timeout,fd,guard}){
     }catch{clearTimeout(timer);stop();reject(Error('Local transcription unavailable'));}
   });
 }
-function wave(pcm){
-  const output=Buffer.alloc(44+pcm.length);output.write('RIFF',0);output.writeUInt32LE(output.length-8,4);output.write('WAVEfmt ',8);
-  output.writeUInt32LE(16,16);output.writeUInt16LE(1,20);output.writeUInt16LE(1,22);output.writeUInt32LE(16000,24);output.writeUInt32LE(32000,28);
-  output.writeUInt16LE(2,32);output.writeUInt16LE(16,34);output.write('data',36);output.writeUInt32LE(pcm.length,40);pcm.copy(output,44);return output;
-}
 
 // Code-only injection supports offline tests. Remote tool arguments cannot select
 // programs, model paths, subprocess options, files, or network destinations.
@@ -77,7 +74,7 @@ export function createAudioTranscriber({env=process.env,platform=process.platfor
       // Avoid transcribing digital silence into a hallucinated sentence.
       let energy=0;for(let i=0;i<pcm.length;i+=2){const sample=pcm.readInt16LE(i);energy+=sample*sample;}
       if(Math.sqrt(energy/(pcm.length/2))<10)return unavailable();
-      wav=wave(pcm);authorize();
+      wav=pcm16Wave(pcm);authorize();
       // An explicit unused output basename keeps the CLI's stdout transcript
       // callback enabled for stdin input; no output-file format is requested.
       output=await execute(tools.flock,['--no-fork','--nonblock','/proc/self/fd/3',tools.prlimit,'--as=1610612736','--cpu=28','--core=0','--fsize=0','--',tools.binary,'--model',tools.model,'--file','-','--output-file','/dev/null','--language','auto','--threads','1','--no-prints','--no-timestamps'],wav,{limit:TEXT_LIMIT*4,timeout:budget(28000),fd:guard.fd,guard:tools.guard});

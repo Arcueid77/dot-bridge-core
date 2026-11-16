@@ -7,6 +7,7 @@ import {experienceDefinitions} from './experience-contract.js';
 import {uploadDefinitions,isUploadTool,validateUploadArguments,projectUploadResult,UPLOAD_RPC_BYTES} from './uploads.js';
 import {choiceDefinitions,isChoiceTool,validateChoiceArguments,projectChoiceResult} from './choices.js';
 import {taskDefinitions,isTaskTool,validateTaskArguments,projectTaskResult} from './tasks.js';
+import {speechDefinitions,isSpeechTool,validateSpeechArguments,projectSpeechResult} from './speech.js';
 
 const bool={type:'boolean'},str={type:'string'},empty={type:'object',properties:{},additionalProperties:false};
 const schema=(properties,required=Object.keys(properties))=>({type:'object',properties,required,additionalProperties:false});
@@ -41,6 +42,7 @@ export function definitions(channel){
  if(media.reply.length)liveTools.push(...uploadDefinitions(c,media.reply));
  liveTools.push(...choiceDefinitions(c));
  liveTools.push(...taskDefinitions(c));
+ liveTools.push(...speechDefinitions(channel));
  return {backendSetupTool,readinessTool,liveReadinessTool,liveTools,event};
 }
 function assertOutput(value,s){
@@ -56,7 +58,7 @@ function assertOutput(value,s){
 export function createChannelAdapter(channel){
  const d=definitions(channel),c=channel.id,media=mediaCapabilities(channel);
   return Object.freeze({id:c,envPrefix:channel.envPrefix,defaultPort:channel.defaultPort,serviceKeyNewline:true,...d,readinessBackendTools:[],scopes:channel.experience?.groups?['owner','configured']:['owner'],
-  limits:{request:262144,response:262144,body:131072,bodyTools:media.reply.length?{[`reply_${c}_media`]:MEDIA_RPC_LIMIT,[`append_${c}_attachment_upload`]:UPLOAD_RPC_BYTES}:{},requestTools:media.reply.length?{[`reply_${c}_media`]:MEDIA_RPC_LIMIT,[`append_${c}_attachment_upload`]:UPLOAD_RPC_BYTES}:{},responseTools:{...(media.read.length?{[`get_${c}_attachment`]:MEDIA_RPC_LIMIT}:{}),...(d.liveTools.some(tool=>tool.name===`list_${c}_scheduled_messages`)?{[`list_${c}_scheduled_messages`]:524288}:{})},timeouts:{...(media.read.length?{[`get_${c}_attachment`]:45000}:{}),...(media.reply.length?{[`reply_${c}_media`]:15000,[`finish_${c}_attachment_upload`]:15000,[`reply_${c}_uploaded_attachment`]:15000}:{}),...(media.read.length&&media.reply.length?{[`reply_${c}_attachment`]:45000}:{})}},
+  limits:{request:262144,response:262144,body:131072,bodyTools:media.reply.length?{[`reply_${c}_media`]:MEDIA_RPC_LIMIT,[`append_${c}_attachment_upload`]:UPLOAD_RPC_BYTES}:{},requestTools:media.reply.length?{[`reply_${c}_media`]:MEDIA_RPC_LIMIT,[`append_${c}_attachment_upload`]:UPLOAD_RPC_BYTES}:{},responseTools:{...(media.read.length?{[`get_${c}_attachment`]:MEDIA_RPC_LIMIT}:{}),...(d.liveTools.some(tool=>tool.name===`list_${c}_scheduled_messages`)?{[`list_${c}_scheduled_messages`]:524288}:{})},timeouts:{...(media.reply.includes('audio')?{[`reply_${c}_speech`]:45000}:{}),...(media.read.length?{[`get_${c}_attachment`]:45000}:{}),...(media.reply.length?{[`reply_${c}_media`]:15000,[`finish_${c}_attachment_upload`]:15000,[`reply_${c}_uploaded_attachment`]:15000}:{}),...(media.read.length&&media.reply.length?{[`reply_${c}_attachment`]:45000}:{})}},
   validateToolArguments(name,args,live){
    if(name===d.readinessTool.name||name===d.backendSetupTool.name){object(args,live?['callback_url']:[]);if(args.callback_url!==undefined)callbackUrl(args.callback_url);return {...args};}
    if(!live)throw new BridgeError('Channel is not live',{status:403,code:-32012});
@@ -64,6 +66,7 @@ export function createChannelAdapter(channel){
    if(isUploadTool(c,name))return validateUploadArguments(c,name,args,media.reply);
    if(isChoiceTool(c,name))return validateChoiceArguments(c,name,args);
    if(isTaskTool(c,name))return validateTaskArguments(c,name,args);
+   if(isSpeechTool(channel,name))return validateSpeechArguments(channel,name,args);
    const spec=d.liveTools.find(t=>t.name===name);if(!spec)throw new BridgeError('Unknown channel tool');
    object(args,Object.keys(spec.inputSchema.properties),spec.inputSchema.required);
    if(name===`reply_${c}_media`){const bytes=decodeMedia(args.data);try{validateMedia({type:args.type,data:bytes,mimeType:args.mime_type,name:args.name});}finally{bytes.fill(0);}}
@@ -76,6 +79,7 @@ export function createChannelAdapter(channel){
    if(isUploadTool(c,call.name))return projectUploadResult(c,call,result,media.reply);
    if(isChoiceTool(c,call.name))return projectChoiceResult(c,call,result);
    if(isTaskTool(c,call.name))return projectTaskResult(c,call,result);
+   if(isSpeechTool(channel,call.name))return projectSpeechResult(channel,call,result);
    object(result,['content','isError','structuredContent','resultType','_meta'],['isError','structuredContent']);if(result.isError!==false)throw Error();
    const spec=[...d.liveTools,d.backendSetupTool,d.liveReadinessTool].find(t=>t.name===call.name);if(!spec)throw Error();
    assertOutput(result.structuredContent,spec.outputSchema);

@@ -11,16 +11,21 @@ function executable(name){
   if(!resolved.startsWith('/usr/bin/'))throw new BridgeError('Untrusted media runtime');
   return assertTrustedRuntimeFile(resolved);
 }
-export function protectedMediaProcess(name,args,input,{limit=MAX_ATTACHMENT_BYTES,timeout=20000}={}){
-  const target=executable(name),launcher=executable('prlimit'),guard=assertTrustedRuntimeFile(process.env.DOT_BRIDGE_AUDIO_GUARD);
+export function protectedMediaProcess(name,args,input,{limit=MAX_ATTACHMENT_BYTES,timeout=20000,fd,signal,guardFile=process.env.DOT_BRIDGE_AUDIO_GUARD}={}){
+  const target=executable(name),launcher=executable('prlimit'),guard=assertTrustedRuntimeFile(guardFile);
   if(!Buffer.isBuffer(input)||!input.length||input.length>MAX_ATTACHMENT_BYTES)throw new BridgeError('Media conversion input refused');
+  if(signal?.aborted)throw new BridgeError('Media conversion was cancelled');
   return new Promise((resolve,reject)=>{
     let child,finished=false,failed=false,size=0;const chunks=[];
-    const finish=error=>{if(finished)return;finished=true;clearTimeout(timer);const result=error?null:Buffer.concat(chunks);chunks.forEach(chunk=>chunk.fill(0));if(error)reject(new BridgeError('Media conversion unavailable or rejected'));else resolve(result);};
+    const finish=error=>{if(finished)return;finished=true;clearTimeout(timer);signal?.removeEventListener('abort',stop);const result=error?null:Buffer.concat(chunks);chunks.forEach(chunk=>chunk.fill(0));if(error)reject(new BridgeError('Media conversion unavailable or rejected'));else resolve(result);};
     const stop=()=>{failed=true;child?.kill('SIGKILL');};
     const timer=setTimeout(stop,timeout);
     try{
-      child=spawn(launcher,['--core=0','--as=536870912','--cpu=15','--',target,...args],{shell:false,windowsHide:true,cwd:'/',stdio:['pipe','pipe','pipe'],env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8',LD_PRELOAD:guard}});
+      const command=fd===undefined?launcher:executable('flock');
+      const parameters=['--core=0','--as=536870912','--cpu=15','--',target,...args];
+      const invocation=fd===undefined?parameters:['--no-fork','--nonblock','--conflict-exit-code','75','/proc/self/fd/3',launcher,...parameters];
+      child=spawn(command,invocation,{shell:false,windowsHide:true,cwd:'/',stdio:['pipe','pipe','pipe',...(fd===undefined?[]:[fd])],env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8',LD_PRELOAD:guard}});
+      signal?.addEventListener('abort',stop,{once:true});
       child.stdout.on('data',chunk=>{size+=chunk.length;if(size>limit){chunk.fill(0);stop();}else chunks.push(chunk);});
       child.stderr.on('data',chunk=>chunk.fill(0));child.stdin.on('error',()=>{});child.on('error',()=>{failed=true;});child.on('close',code=>finish(failed||code!==0));
       child.stdin.end(input);

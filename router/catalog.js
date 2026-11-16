@@ -1,7 +1,7 @@
 import { enabled } from './live-contract.js';
+import {canonicalValue} from './runtime.js';
 export const sameSchema=(actual,expected)=>{
-  const canonical=value=>Array.isArray(value)?'['+value.map(canonical).join(',')+']':value&&typeof value==='object'?'{'+Object.keys(value).sort().map(k=>JSON.stringify(k)+':'+canonical(value[k])).join(',')+'}':JSON.stringify(value);
-  return canonical(actual)===canonical(expected);
+  return canonicalValue(actual)===canonicalValue(expected);
 };
 export const toolCatalog=config=>[
   ...Object.entries(config.channels).map(([id,{adapter}])=>enabled(config,id)?adapter.liveReadinessTool:adapter.readinessTool),

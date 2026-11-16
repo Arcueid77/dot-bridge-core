@@ -1,6 +1,6 @@
 {
   "name": "@dot-bridge/core",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -21,6 +21,7 @@
     "./router/*": "./router/*"
   },
   "files": [
+    "source-revision.txt",
     "channels/",
     "docs/channel-provider-contract.md",
     "audio/",

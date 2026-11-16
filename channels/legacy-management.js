@@ -9,7 +9,7 @@ export class LegacyManagement {
     store.db.exec("CREATE TABLE IF NOT EXISTS bridge_management_reply(id TEXT PRIMARY KEY,payload TEXT NOT NULL,created INTEGER NOT NULL,expires INTEGER NOT NULL,state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS bridge_management_cancelled(message_id TEXT PRIMARY KEY); UPDATE bridge_management_reply SET state='uncertain' WHERE state='processing';");
   }
   queue() {
-    return this.store.all('SELECT id FROM messages WHERE expires>? AND text IS NOT NULL ORDER BY received DESC,rowid DESC LIMIT 1000',this.clock()).map(row=>this.store.message(row.id)).filter(message=>this.ownerPrivate(message)).map(message=>{
+    return this.store.all('SELECT id FROM messages WHERE expires>? AND text IS NOT NULL ORDER BY received DESC,rowid DESC LIMIT 1000',this.clock()).map(row=>this.store.message(row.id)).filter(message=>this.ownerPrivate(message)&&(this.store.conversationQueue?.anchor(message.id)??message.id)===message.id).map(message=>{
       const states=this.store.all("SELECT state FROM jobs WHERE message_id=? AND state IN ('pending','processing','uncertain')",message.id);
       for(const table of ['feedback','reply_streams'])if(this.store.get("SELECT name FROM sqlite_master WHERE type='table' AND name=?",table)){
         const row=this.store.get('SELECT state FROM '+table+' WHERE message_id=?',message.id);if(row&&['working','processing','uncertain'].includes(row.state))states.push({state:row.state==='working'?'processing':row.state});

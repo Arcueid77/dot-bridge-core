@@ -2,7 +2,7 @@ import {BridgeError, object, RICH_TOOL_RESULT} from '../router/common.js';
 import {MAX_MEDIA_BYTES,MAX_MEDIA_BASE64,MEDIA_RPC_LIMIT} from './tunnel-budget.js';
 
 export {MAX_MEDIA_BYTES,MAX_MEDIA_BASE64,MEDIA_RPC_LIMIT};
-const types = ['image', 'audio', 'file'];
+const types = ['image', 'audio', 'file', 'video', 'sticker'];
 const bad = () => new BridgeError('Media type, format, size or name is unsupported');
 const oversized = () => new BridgeError('Attachment exceeds the 5 MiB tunnel limit', {status:413,code:-32602,data:{reason:'media_limit_exceeded',max_bytes:MAX_MEDIA_BYTES}});
 
@@ -47,6 +47,8 @@ export function validateMedia({type, data, mimeType, name}) {
   mediaMime(mimeType); mediaName(name);
   if (type === 'image' && imageType(data) !== mimeType) throw bad();
   if (type === 'audio' && !mimeType.startsWith('audio/')) throw bad();
+  if (type === 'video' && !mimeType.startsWith('video/')) throw bad();
+  if (type === 'sticker' && !['image/png','image/apng','image/gif','image/webp','video/webm','application/x-tgsticker'].includes(mimeType)) throw bad();
 }
 
 function binaryBlock(value, data) {

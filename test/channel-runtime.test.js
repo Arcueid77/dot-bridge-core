@@ -166,14 +166,41 @@ test('a generated attachment is uploaded through the real authenticated router a
  assert.equal(f.calls.length,1);assert.deepEqual(f.calls[0].media.data,bytes);
  assert.equal((await call('reply_fixture_uploaded_attachment',reply)).body.result.structuredContent.status,'sent');await settle(service);assert.equal(f.calls.length,1);
 });
-function mediaFixture(t,{read,send,validate,transcribe}={}){
+function mediaFixture(t,{read,send,validate,transcribe,speechSynthesizer}={}){
  const f=fixture(t),config={...f.config(),channel:mediaChannel},calls=[];
- const service=new ChannelService(config,{transport:transportFixture().send,transcribe,createProvider:()=>({
+ const service=new ChannelService(config,{transport:transportFixture().send,transcribe,speechSynthesizer,createProvider:()=>({
   start:async()=>{},stop:async()=>{},status:()=>({connected:true}),sendReply:async()=>{},
   readAttachment:read??(async()=>({data:Buffer.from('private fixture file'),mimeType:'text/plain',name:'note.txt'})),
   validateMediaReply:validate??(()=>{}),sendMediaReply:send??(async args=>{calls.push({...args,media:{...args.media,data:Buffer.from(args.media.data)}});})
  })});beforeFixtureCleanup(t,()=>service.close());return {...f,config,service,calls};
 }
+
+test('local speech crosses the authenticated router once and retains the generated text result', async t => {
+  let generations = 0;
+  const synthesizer = {status: () => ({configured: true, runtime_ready: true, busy: false, last_failure: null}),
+    generate: async () => {generations++;return {data: Buffer.from('synthetic fixture audio'), mimeType: 'audio/wav', name: 'voice.wav'};}};
+  const f = mediaFixture(t, {speechSynthesizer: synthesizer}), {service} = f;
+  await service.subscribe(subscription());
+  const id = await service.ingest(incoming('speech-source'));
+  await settle(service);
+  const backend = channelServer(f.config, service), address = await backend.listen(0);
+  beforeFixtureCleanup(t, () => backend.close());
+  const adapter = createChannelAdapter(mediaChannel);
+  const router = createApp({host: '127.0.0.1', port: 8798, owner: OWNER, operation: 'live', liveChannels: ['fixture'],
+    ingressKeyFile: f.keys[1], channels: {fixture: {adapter, port: address.port, keyFile: f.keys[0]}}}, {approvedLive: true});
+  const route = await router.listen(0), key = fs.readFileSync(f.keys[1], 'utf8');
+  beforeFixtureCleanup(t, () => router.close());
+  const args = {message_id: id, text: 'A genuinely generated answer', idempotency_key: 'one-voice-answer'};
+  assert.equal((await rpc(route.port, key, 'tools/call', {name: 'check_fixture_speech', arguments: {}})).body.result.structuredContent.runtime_ready, true);
+  assert.equal((await rpc(route.port, key, 'tools/call', {name: 'reply_fixture_speech', arguments: args})).status, 200);
+  await settle(service);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].media.type, 'audio');
+  assert.equal((await rpc(route.port, key, 'tools/call', {name: 'reply_fixture_speech', arguments: args})).body.result.structuredContent.status, 'sent');
+  assert.equal(generations, 1);
+  const task = service.tasks.begin(id);
+  assert.equal(task.text, args.text);
+});
 test('source attachment replies cross the router once and persist bytes without a model Base64 round trip',async t=>{
  let reads=0;const source=Buffer.from('reusable source file');
  const f=mediaFixture(t,{read:async input=>{assert.equal(input.forReply,true);reads++;return {data:Buffer.from(source),mimeType:'text/plain',name:'note.txt'};}}),{service}=f;

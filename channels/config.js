@@ -5,6 +5,7 @@ import {validHostname,boundedString} from '../router/live-contract.js';
 import {OWNER} from '../router/common.js';
 import {outboundEnabled} from './outbound.js';
 import {interactionPolicy} from './experience-policy.js';
+import {speechConfiguration} from '../audio/synthesis.js';
 
 const absolute=value=>{if(typeof value!=='string'||!path.isAbsolute(value)||path.normalize(value)!==value||/[\x00-\x1f\x7f]/.test(value))throw Error('Protected absolute path required');return value;};
 function privateText(file,maxBytes){let bytes;try{bytes=readPrivateFile(absolute(file),{maxBytes});return new TextDecoder('utf-8',{fatal:true}).decode(bytes);}finally{bytes?.fill(0);}}
@@ -21,6 +22,7 @@ export function createChannelConfig(channel,env=process.env){
   return Object.freeze(config);
  }
  if(env.CALLBACK_TRANSPORT_MODE!=='standard'||env.STORAGE_KEY||env[`${channel.envPrefix}_TRANSPORT`]==='disabled')throw Error('Live standard callback configuration required');
+ speechConfiguration(env);
  const credentials=JSON.parse(privateText(credentialFile,65536));
  if(!credentials||typeof credentials!=='object'||Array.isArray(credentials))throw Error('Invalid provider credential document');
  boundedString(credentials.ownerId,256);boundedString(credentials.conversationId,256);

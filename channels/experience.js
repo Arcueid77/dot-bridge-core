@@ -58,6 +58,19 @@ export class ChannelExperience {
         if(--budget<0)return;
         try{await service.provider.setTyping({message:row.message,active:typing,authorize});value={...this.get(row.id),typingAt:service.clock(),typingActive:typing,typingFailures:0};this.save(row.id,value);}catch{value={...this.get(row.id),typingAt:service.clock(),typingFailures:(value.typingFailures??0)+1};this.save(row.id,value);}
       }
+      if (!terminal && policy.feedback.enabled && policy.feedback.typing && value.phase === 'processing' &&
+          value.lease > service.clock() && !value.streamReference && value.streamState === 'none' &&
+          typeof service.provider.beginProgress === 'function') {
+        if (--budget < 0) return;
+        try {
+          service.authorized(row);
+          this.save(row.id, value, true);
+          const reference = await service.provider.beginProgress({message: row.message, authorize});
+          if (!reference || JSON.stringify(reference).length > 65536) throw new Error('Processing receipt is unavailable.');
+          value = {...this.get(row.id), streamReference: reference, streamState: 'active', appliedSequence: 0, appliedChars: 0};
+          this.save(row.id, value, false);
+        } catch { value = {...this.get(row.id), streamState: 'uncertain'}; this.save(row.id, value, false); }
+      }
       if(!terminal&&value.sequence>(value.appliedSequence??0)&&value.streamState!=='uncertain'&&typeof service.provider.sendProgress==='function'){
         const elapsed=service.clock()-(value.progressAt??0);
         const growth=value.text.length-(value.appliedChars??0);
@@ -91,7 +104,7 @@ export class ChannelExperience {
       if(reply.media||this.service.provider.canProgressFinal?.({text:reply.text,format:reply.format})===false){
         if(typeof this.service.provider.finishProgress!=='function')throw new Error('Progress cannot be replaced safely');
         this.save(row.id,value,true);
-        try{await this.service.provider.finishProgress({message:row.message,reference:value.streamReference,cancelled:true,authorize});this.save(row.id,{...value,phase:'finished',streamReference:null},false);return false;}
+        try{await this.service.provider.finishProgress({message:row.message,reference:value.streamReference,cancelled:true,replacement:true,authorize});this.save(row.id,{...value,phase:'finished',streamReference:null},false);return false;}
         catch{this.save(row.id,{...value,streamState:'uncertain'},false);throw new Error('Progress replacement outcome is uncertain');}
       }
       this.save(row.id,value,true);

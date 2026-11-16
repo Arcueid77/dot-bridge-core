@@ -29,6 +29,40 @@ const message=(id,chat='group-a',other={})=>({id,senderId:'member',conversationI
 const sub=(scope='owner')=>({name:'fixture.message.created',arguments:{conversation:scope},delivery:{mode:'webhook',url:'https://callback.example.com/current-dot',secret:'whsec_'+Buffer.alloc(32,33).toString('base64')},ttlMs:600000});
 const settle=async service=>{await service.working;await service.drain();};
 
+test('a native processing cue is separate from generated text and finalizes the same reply', async t => {
+  const f = fixture(t, {feedback: {enabled: true}});
+  let starts = 0;
+  const service = f.open({beginProgress: async value => {value.authorize();starts++;return {id: 'processing-receipt'};}});
+  await service.subscribe(sub());
+  const id = await service.ingest(owner('native-processing'));
+  await settle(service);
+  service.call('begin_fixture_reply', {message_id: id});
+  await settle(service);
+  assert.equal(starts, 1);
+  assert.equal(service.experience.get(id).text, '');
+  service.call('append_fixture_reply', {message_id: id, sequence: 1, text: 'Generated answer'});
+  await settle(service);
+  assert.equal(f.progress[0].reference.id, 'processing-receipt');
+  service.call('reply_to_fixture', {message_id: id, text: 'Generated answer', idempotency_key: 'native-final'});
+  await settle(service);
+  assert.equal(f.progress.at(-1).final, true);
+  assert.equal(f.calls.length, 0);
+});
+
+test('an unknown processing cue acknowledgement preserves uncertainty before any queued genuine progress', async t => {
+  const f = fixture(t, {feedback: {enabled: true}});
+  const service = f.open({beginProgress: async () => {throw Error('unknown receipt');}});
+  await service.subscribe(sub());
+  const id = await service.ingest(owner('unknown-processing'));
+  await settle(service);
+  service.call('begin_fixture_reply', {message_id: id});
+  service.call('append_fixture_reply', {message_id: id, sequence: 1, text: 'Generated answer'});
+  await settle(service);
+  assert.equal(service.call('get_fixture_reply_status', {message_id: id}).status, 'uncertain');
+  assert.equal(f.progress.length, 0);
+  assert.equal(f.calls.length, 0);
+});
+
 test('tracked work retains one encrypted result after the passive deadline and the owner retrieves it explicitly', async t => {
   let now = Date.now();
   const f = fixture(t), service = f.open({}, () => now);

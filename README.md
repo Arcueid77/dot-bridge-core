@@ -165,6 +165,14 @@ Shared interaction modules add bounded processing feedback, genuine progressive 
 
 ## Processing and final delivery
 
+`begin_<channel>_task`, `save_<channel>_task_result` and the two task read tools retain a generated text result in encrypted state after the passive reply deadline. The paired owner can use `/tasks` and `/result <reference>`. Retention follows the source record. An explicit known provider rejection can be retried with `retry_<channel>_outbound`, its current revision and `confirm=true`; ambiguous sends stay uncertain.
+
+The protected interaction policy accepts `queue.mode` of `independent`, `serial` or `batch`, `window_ms` from 0 to 3000 and `max_messages` from 2 to 20. The default is independent. Only unread plain-text sources in the same conversation, topic, sender scope and subscription generation can be combined. Every source remains stored and points to one anchor and outcome. QQ and Lark use the shared legacy queue adapter over their existing stores.
+
+Optional local speech uses `DOT_BRIDGE_SPEECH_SYNTHESIS=local-espeak` and `DOT_BRIDGE_SPEECH_VOICE=zh`, the existing protected audio guard and shared audio lock. Install root-owned `/usr/bin/espeak-ng`, FFmpeg, prlimit and flock on Linux. `check_<channel>_speech` reports runtime readiness and delivery type. `reply_<channel>_speech` accepts up to 2000 characters and 120 seconds and retains the full text result. QQ/Weixin use native voice, Lark/Telegram use Opus, Discord can use its native voice attachment, LINE uses MP3, and DingTalk/WeCom receive a WAV file. Provider media settings still apply.
+
+The authenticated loopback `/runtime` endpoint reports the actual source SHA, package version and catalog fingerprint. GitHub/Git archives expand `source-revision.txt`; packages include that public provenance file. Operators compare the running catalog with the installed catalog and separately refresh the original dot's loaded plugin directory.
+
 For the shared channel runtime, `get_<channel>_reply_status` reports final delivery. It remains `none` during a typing/processing lease until a final answer is queued. `begin`/`append` can report the separate processing lifecycle; finalize the current flow once. An ambiguous native progress write remains `uncertain`. Telegram/Discord append cumulative text; the established Lark adapter appends deltas. See the [provider contract](docs/channel-provider-contract.md).
 
 Protected PDF/Office extraction uses the packaged `audio/read-document.py` worker through root-owned Python/prlimit and the existing guard. The reviewed public runtime tree, including that worker, must be root-owned and service-user read-only; private data remains owned by the service account. The host supplies Python 3 with `pypdf` for PDF text. The bounded worker keeps original attachments available when extraction is unavailable.
