@@ -75,6 +75,7 @@ test('configured batching keeps both sources and one final outcome across restar
   await settle(service);
   assert.equal(f.calls.length, 1);
   assert.equal(service.call('get_fixture_reply_status', {message_id: first}).status, 'sent');
+  assert.equal(service.call('get_fixture_message', {message_id: first}).reply_status, 'sent');
   await service.close();
   const restored = f.open({}, () => now);
   await settle(restored);

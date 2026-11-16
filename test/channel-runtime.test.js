@@ -353,7 +353,8 @@ test('maximum-sized attachment and reply traverse the actual authenticated route
  assert.equal(read.status,200);assert.equal(read.body.result.structuredContent.size,MAX_MEDIA_BYTES);
  const args={message_id:id,type:'file',data:Buffer.alloc(MAX_MEDIA_BYTES+1,65).toString('base64'),mime_type:'application/octet-stream',name:'answer.bin',idempotency_key:'max-once'};
  const rejected=await rpc(route.port,key,'tools/call',{name:'reply_fixture_media',arguments:args});assert.equal(rejected.status,400);assert.equal(rejected.body.error.code,-32602);assert.equal(f.calls.length,0);assert.equal(service.store.message(id).reply_state,'none');
- args.data=Buffer.alloc(MAX_MEDIA_BYTES,65).toString('base64');assert.equal((await rpc(route.port,key,'tools/call',{name:'reply_fixture_media',arguments:args})).status,200);await settle(service);
+ assert.equal(adapter.limits.timeouts.reply_fixture_media,15000);
+ args.data=Buffer.alloc(MAX_MEDIA_BYTES,65).toString('base64');const queued=await rpc(route.port,key,'tools/call',{name:'reply_fixture_media',arguments:args});assert.equal(queued.status,200,JSON.stringify(queued.body.error??{}));await settle(service);
  assert.equal(f.calls.length,1);assert.equal(f.calls[0].media.data.length,MAX_MEDIA_BYTES);
  const ready=await rpc(route.port,key,'tools/call',{name:'check_fixture_readiness',arguments:{}});assert.equal(ready.status,200);
  assert.equal(ready.body.result.structuredContent.media_limits.read_bytes,MAX_MEDIA_BYTES);assert.equal(ready.body.result.structuredContent.subscription_status.state,'active');

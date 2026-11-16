@@ -133,7 +133,7 @@ export class ChannelService{
    this.store.set('subscription_epoch',(this.store.get('subscription_epoch')??0)+1);
   });return {};
  }
- message(row){const m=row.message,route=routeOf(this.config,m);return {message_id:row.id,conversation:route?.scope??'owner',text:this.queue.text(row),attachments:m.attachments,...(this.queue.members(row.id).length>1?{source_message_ids:this.queue.members(row.id)}:{}),reply_deadline:new Date(row.expires).toISOString(),reply_status:this.experience.get(row.id).streamState==='uncertain'?'uncertain':row.reply_state,...(this.config.channel.experience?{context_key:route.key,...(m.quote?.text?{quote:{text:m.quote.text,truncated:m.quote.truncated===true}}:{})}:{})};}
+ message(row){const m=row.message,route=routeOf(this.config,m);return {message_id:row.id,conversation:route?.scope??'owner',text:this.queue.text(row),attachments:m.attachments,...(this.queue.members(row.id).length>1?{source_message_ids:this.queue.members(row.id)}:{}),reply_deadline:new Date(row.expires).toISOString(),reply_status:this.experience.get(this.queue.anchor(row.id)).streamState==='uncertain'?'uncertain':this.queue.status(row),...(this.config.channel.experience?{context_key:route.key,...(m.quote?.text?{quote:{text:m.quote.text,truncated:m.quote.truncated===true}}:{})}:{})};}
  withAttachment(row,index,consume,{forReply=false}={}){
   if(this.reads.size)throw new BridgeError('An attachment is already being read',{status:429,code:-32013});
   const attachment=row.message.attachments[index];
