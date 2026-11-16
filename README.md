@@ -165,7 +165,7 @@ Shared interaction modules add bounded processing feedback, genuine progressive 
 
 ## Processing and final delivery
 
-`begin_<channel>_task`, `save_<channel>_task_result` and the two task read tools retain a generated text result in encrypted state after the passive reply deadline. The paired owner can use `/tasks` and `/result <reference>`. Retention follows the source record. An explicit known provider rejection can be retried with `retry_<channel>_outbound`, its current revision and `confirm=true`; ambiguous sends stay uncertain.
+`begin_<channel>_task`, `save_<channel>_task_result` and `get_<channel>_task_result` retain and retrieve a generated text result in encrypted state after the passive reply deadline. The paired owner can use `/tasks` and `/result <reference>`. Retention follows the source record. An explicit known provider rejection can be retried with `retry_<channel>_outbound`, its current revision and `confirm=true`; ambiguous sends stay uncertain.
 
 The protected interaction policy accepts `queue.mode` of `independent`, `serial` or `batch`, `window_ms` from 0 to 3000 and `max_messages` from 2 to 20. The default is independent. Only unread plain-text sources in the same conversation, topic, sender scope and subscription generation can be combined. Every source remains stored and points to one anchor and outcome. QQ and Lark use the shared legacy queue adapter over their existing stores.
 
