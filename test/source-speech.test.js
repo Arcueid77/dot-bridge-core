@@ -38,3 +38,19 @@ test('an earlier uncertain native reply prevents a new speech conversion or deli
   assert.equal(f.calls(), 0);
   assert.equal(f.records.length, 0);
 });
+
+test('a failed local conversion cannot replace the retained answer with different speech text',async()=>{
+  const f=fixture();let saved,attempts=0;
+  f.speech.begin=()=>({result_available:typeof saved==='string',...(saved?{text:saved}:{})});
+  f.speech.recordResult=(_id,text)=>{saved??=text;};
+  f.speech.synthesizer.generate=async()=>{
+    if(++attempts===1)throw Error('synthetic local conversion failure');
+    return {data:Buffer.from('synthetic audio'),name:'voice.wav',mimeType:'audio/wav'};
+  };
+  const args={message_id:'source',text:'Original complete answer',idempotency_key:'one-answer'};
+  await assert.rejects(f.speech.reply(args));
+  await assert.rejects(f.speech.reply({...args,text:'Different answer'}));
+  assert.equal(attempts,1);assert.equal(saved,args.text);
+  assert.equal((await f.speech.reply(args)).status,'pending');
+  assert.equal(attempts,2);
+});

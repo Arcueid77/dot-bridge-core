@@ -77,7 +77,8 @@ export class SourceSpeech {
       await running.promise;
       return this.status(id);
     }
-    this.begin?.(id);
+    const task=this.begin?.(id);
+    if(task?.result_available===true&&task.text!==args.text)throw new BridgeError('This task already retains a different complete answer.',{status:409,code:-32013});
     this.recordResult?.(id, args.text, digest);
     const readiness = this.check();
     if (!readiness.runtime_ready || !readiness.reply_configured) throw new BridgeError('Local speech reply preparation is unavailable.', {status: 409, code: -32016});
