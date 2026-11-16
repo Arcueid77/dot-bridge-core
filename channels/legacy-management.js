@@ -4,8 +4,8 @@ import {parseManagement,managementText} from './management.js';
 // Adapter for the established Lark/QQ stores. Only this local control outbox is
 // added; existing inbox, subscription generations and uncertain jobs stay intact.
 export class LegacyManagement {
-  constructor({store,channel,enabled=false,receiveWithoutSubscription=false,ownerPrivate,status,sendReply,clock=Date.now}) {
-    Object.assign(this,{store,channel,enabled,receiveWithoutSubscription,ownerPrivate,status,sendReply,clock});this.busy=false;
+  constructor({store,channel,enabled=false,receiveWithoutSubscription=false,ownerPrivate,status,sendReply,tasks,clock=Date.now}) {
+    Object.assign(this,{store,channel,enabled,receiveWithoutSubscription,ownerPrivate,status,sendReply,tasks,clock});this.busy=false;
     store.db.exec("CREATE TABLE IF NOT EXISTS bridge_management_reply(id TEXT PRIMARY KEY,payload TEXT NOT NULL,created INTEGER NOT NULL,expires INTEGER NOT NULL,state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS bridge_management_cancelled(message_id TEXT PRIMARY KEY); UPDATE bridge_management_reply SET state='uncertain' WHERE state='processing';");
   }
   queue() {
@@ -36,7 +36,7 @@ export class LegacyManagement {
       if(checkpoint)checkpoint();
       if(this.store.get('SELECT id FROM bridge_management_reply WHERE id=?',message.id))return true;
       if(this.store.get("SELECT count(*) AS n FROM bridge_management_reply WHERE state IN ('pending','processing')").n>=200)throw Error('Local control queue is full');
-      const text=managementText({command,state:this.status(),queue:this.queue(),channelName:this.channel,cancel:row=>this.cancel(row)});
+      const text=managementText({command,state:this.status(),queue:this.queue(),channelName:this.channel,cancel:row=>this.cancel(row),tasks:this.tasks});
       const payload=this.store.vault.seal({message,text},'management:'+message.id);
       this.store.run("INSERT INTO bridge_management_reply VALUES (?,?,?,?,'pending')",message.id,payload,this.clock(),Math.min(message.expires,this.clock()+900000));
       return true;

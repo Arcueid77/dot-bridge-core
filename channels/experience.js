@@ -27,7 +27,7 @@ export class ChannelExperience {
   }
   append(row,{sequence,text}) {
     this.service.authorized(row);const value=this.get(row.id);
-    if(!this.service.config.channel.experience?.streaming||!this.policy.feedback.enabled||!this.policy.feedback.streaming)throw new BridgeError('Progressive replies are not enabled');
+    if(!this.service.config.channel.experience?.streaming||typeof this.service.provider.sendProgress!=='function'||!this.policy.feedback.enabled||!this.policy.feedback.streaming)throw new BridgeError('Progressive replies are not enabled');
     if(value.streamState==='uncertain')return this.status(row);
     const digest=hash(text);
     if(sequence===value.sequence){if(digest!==value.digest)throw new BridgeError('Progress sequence conflict',{status:409,code:-32013});return this.status(row);}

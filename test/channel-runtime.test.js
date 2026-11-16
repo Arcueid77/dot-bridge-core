@@ -107,7 +107,8 @@ test('new channel integrates through real authenticated router tool/event catalo
  const f=fixture(t),{service}=serviceFixture(t,f),backend=channelServer(f.config(),service);const address=await backend.listen(0);beforeFixtureCleanup(t,()=>backend.close());
  const router=createApp({host:'127.0.0.1',port:8798,owner:OWNER,operation:'live',liveChannels:['fixture'],ingressKeyFile:f.keys[1],channels:{fixture:{adapter:createChannelAdapter(channel),port:address.port,keyFile:f.keys[0]}}},{approvedLive:true});
  const route=await router.listen(0);beforeFixtureCleanup(t,()=>router.close());const key=fs.readFileSync(f.keys[1],'utf8');
- const catalog=await rpc(route.port,key,'tools/list');assert.equal(catalog.status,200);assert.equal(catalog.body.result.tools.length,6);
+ const catalog=await rpc(route.port,key,'tools/list');assert.equal(catalog.status,200);assert.equal(catalog.body.result.tools.length,createChannelAdapter(channel).liveTools.length+1);
+ assert.ok(catalog.body.result.tools.some(tool=>tool.name==='save_fixture_task_result'));
  assert.ok(catalog.body.result.tools.some(tool=>tool.name==='check_fixture_outbound'));
  assert.equal((await rpc(route.port,key,'events/list')).body.result.events[0].name,'fixture.message.created');
  const setup=await rpc(route.port,key,'tools/call',{name:'check_fixture_readiness',arguments:{}});assert.equal(setup.status,200);assert.equal(setup.body.result.structuredContent.binding_ready,true);

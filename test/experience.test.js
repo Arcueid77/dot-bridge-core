@@ -20,7 +20,7 @@ function fixture(t,policy={}){
   const transport=async(_url,{body,beforeConnect})=>{beforeConnect();const value=JSON.parse(body);if(value.type==='verification')return {status:200,body:Buffer.from(JSON.stringify({challenge:value.challenge}))};events.push(value);return {status:200,body:Buffer.from('{}')};};
   transport.preflight=()=>({ready:true});
   let service;
-  const open=(overrides={})=>service=new ChannelService(config,{transport,createProvider:()=>({start:async()=>{},stop:async()=>{},status:()=>({connected:true}),sendReply:async value=>{value.authorize();calls.push(value);},setFeedback:async value=>{value.authorize();feedback.push(value.active);return 'private-reaction-ref';},setTyping:async()=>{},sendProgress:async value=>{value.authorize();progress.push(value);return value.reference??{id:'private-native-message'};},finishProgress:async()=>{},...overrides})});
+  const open=(overrides={},clock=Date.now)=>service=new ChannelService(config,{transport,clock,createProvider:()=>({start:async()=>{},stop:async()=>{},status:()=>({connected:true}),sendReply:async value=>{value.authorize();calls.push(value);},setFeedback:async value=>{value.authorize();feedback.push(value.active);return 'private-reaction-ref';},setTyping:async()=>{},sendProgress:async value=>{value.authorize();progress.push(value);return value.reference??{id:'private-native-message'};},finishProgress:async()=>{},...overrides})});
   beforeFixtureCleanup(t,async()=>{if(service&&!service.closed)await service.close();});
   return {config,events,calls,progress,feedback,open};
 }
@@ -28,6 +28,76 @@ const owner=(id,text='hello')=>({id,senderId:'owner',conversationId:'dm',text,re
 const message=(id,chat='group-a',other={})=>({id,senderId:'member',conversationId:chat,text:'hello group',chatType:'group',botMentioned:true,replyContext:{messageId:id},...other});
 const sub=(scope='owner')=>({name:'fixture.message.created',arguments:{conversation:scope},delivery:{mode:'webhook',url:'https://callback.example.com/current-dot',secret:'whsec_'+Buffer.alloc(32,33).toString('base64')},ttlMs:600000});
 const settle=async service=>{await service.working;await service.drain();};
+
+test('tracked work retains one encrypted result after the passive deadline and the owner retrieves it explicitly', async t => {
+  let now = Date.now();
+  const f = fixture(t), service = f.open({}, () => now);
+  await service.subscribe(sub());
+  const id = await service.ingest({...owner('long-task'), replyDeadline: now + 1000});
+  await settle(service);
+  const task = service.call('begin_fixture_task', {message_id: id});
+  assert.equal(task.remaining_seconds, 1);
+  now += 2000;
+  const saved = service.call('save_fixture_task_result', {task_id: task.task_id, text: 'Complete retained result', idempotency_key: 'one-result'});
+  assert.equal(saved.result_available, true);
+  assert.equal(saved.remaining_seconds, 0);
+  assert.equal(f.calls.length, 0);
+  assert.deepEqual(service.call('save_fixture_task_result', {task_id: task.task_id, text: 'Complete retained result', idempotency_key: 'one-result'}), saved);
+  assert.throws(() => service.call('save_fixture_task_result', {task_id: task.task_id, text: 'Different result', idempotency_key: 'one-result'}));
+  assert.equal(service.store.db.prepare('SELECT payload FROM dotbridge_tasks').get().payload.includes('Complete retained result'), false);
+  await service.ingest(owner('lookup-result', '/result ' + task.task_id.slice(5, 17)));
+  await settle(service);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].text, 'Complete retained result');
+  service.store.set('subscription', {...service.store.get('subscription'), active: false});
+  assert.throws(() => service.call('get_fixture_task_result', {task_id: task.task_id}));
+});
+
+test('configured batching keeps both sources and one final outcome across restart', async t => {
+  let now = Date.now();
+  const f = fixture(t, {queue: {mode: 'batch', window_ms: 500, max_messages: 5}});
+  const service = f.open({}, () => now);
+  await service.subscribe(sub());
+  const first = await service.ingest(owner('batch-first', 'first question'));
+  const last = await service.ingest(owner('batch-last', 'second question'));
+  await settle(service);
+  assert.equal(f.events.length, 0);
+  now += 501;
+  await settle(service);
+  assert.equal(f.events.length, 1);
+  assert.equal(f.events[0].data.message_id, last);
+  const source = service.call('get_fixture_message', {message_id: last});
+  assert.deepEqual(source.source_message_ids, [first, last]);
+  assert.match(source.text, /first question/);
+  assert.match(source.text, /second question/);
+  assert.throws(() => service.call('reply_to_fixture', {message_id: first, text: 'duplicate', idempotency_key: 'child'}));
+  service.call('reply_to_fixture', {message_id: last, text: 'One combined answer', idempotency_key: 'batch-answer'});
+  await settle(service);
+  assert.equal(f.calls.length, 1);
+  assert.equal(service.call('get_fixture_reply_status', {message_id: first}).status, 'sent');
+  await service.close();
+  const restored = f.open({}, () => now);
+  await settle(restored);
+  assert.deepEqual(restored.queue.members(last), [first, last]);
+  assert.equal(restored.call('get_fixture_reply_status', {message_id: first}).status, 'sent');
+  assert.equal(f.calls.length, 1);
+});
+
+test('serial dispatch releases the next source after the preceding final reply', async t => {
+  let now = Date.now();
+  const f = fixture(t, {queue: {mode: 'serial'}}), service = f.open({}, () => now);
+  await service.subscribe(sub());
+  const first = await service.ingest(owner('serial-first'));
+  const next = await service.ingest(owner('serial-next'));
+  await settle(service);
+  assert.equal(f.events.length, 1);
+  service.call('reply_to_fixture', {message_id: first, text: 'first complete', idempotency_key: 'first'});
+  await settle(service);
+  now += 501;
+  await settle(service);
+  assert.equal(f.events.length, 2);
+  assert.equal(f.events[1].data.message_id, next);
+});
 
 test('native choice delivery binds its positive receipt before accepting a click',async t=>{
   const f=fixture(t),sent=[];

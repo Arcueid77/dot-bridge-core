@@ -27,6 +27,22 @@
 
 ## 配置与接口
 
+### 长任务与连续消息
+
+`begin_<channel>_task` 记录实际开始的工作及被动回复窗口剩余时间。
+`save_<channel>_task_result` 保存一份完整文字结果，支持在该窗口结束后保存；
+`get_<channel>_task_result` 通过原有效订阅读取。本人可在原私聊使用 `/tasks`
+和 `/result 编号` 查询。结果沿用现有加密数据库和保留期限，查询消息使用本次新消息的正常回复机制。
+
+共享渠道的受保护交互策略支持 `queue.mode`，可选 `independent`（默认）、`serial`
+和 `batch`。合并模式使用 `queue.window_ms`（0～3000，默认 750）及
+`queue.max_messages`（2～20，默认 5）。每条来源保留自己的编号和共同回复结果，
+最后一条来源承接回复。合并范围由会话、话题和已配置的成员上下文决定。
+附件、引用及已经开始处理的工作分别回复。
+
+LINE 的原生选项使用经过签名验证的 postback，绑定回复接口确认的提示消息、原发送人、
+原私聊和有期限的随机选项；首次选择持久保存。
+
 | 项目 | 用法 |
 | --- | --- |
 | 交互策略 | Telegram／Discord／微信使用 `DOT_BRIDGE_INTERACTION_POLICY_FILE`；飞书沿用自己的策略格式 |

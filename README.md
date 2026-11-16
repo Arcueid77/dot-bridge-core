@@ -45,6 +45,27 @@ expose bounded attachment reads and a single final text or media reply. Private
 download references remain encrypted, and authorization is checked again before
 each stage of a media send. Setup tools expose redacted subscription diagnostics.
 
+## Tasks and conversation queues
+
+`begin_<channel>_task` records actual work and its remaining passive reply time.
+`save_<channel>_task_result` stores one complete text result, including after that
+window ends. `get_<channel>_task_result` reads it through the original active
+subscription. The paired owner can use `/tasks` and `/result <reference>` in the
+original private chat. Results use the existing encrypted database and retention
+period. A fresh result query uses that new message's ordinary reply mechanism.
+
+Protected shared-channel interaction policies accept `queue.mode` values
+`independent` (default), `serial`, and `batch`. Batch mode combines plain-text
+inputs within `queue.window_ms` (0–3000, default 750), bounded by
+`queue.max_messages` (2–20, default 5). Each source remains stored with its own
+identifier and the shared reply outcome. The last source anchors the reply.
+Conversation, topic and configured sender context determine the batch boundary.
+Attachments, quotations and work already being processed retain separate replies.
+
+LINE providers can use authenticated native postbacks whose source receipt is
+confirmed by the reply API. Every choice remains bound to its original sender,
+private chat, expiring token and durable first selection.
+
 MCP attachment reads and replies are limited to 5 MiB per original file. Base64,
 duplicated transcript metadata and the official Tunnel envelope consume additional
 space; the raw file limit is not the Tunnel's serialized 10 MiB limit. Providers

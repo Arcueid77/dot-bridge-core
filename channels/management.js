@@ -1,11 +1,11 @@
 import {routeOf} from './experience-policy.js';
 import {createHash} from 'node:crypto';
 
-const commands=new Set(['help','status','queue','subscription','cancel','stop','new','reset','approve']);
+const commands=new Set(['help','status','queue','subscription','cancel','tasks','result','stop','new','reset','approve']);
 const reference=row=>row.id.startsWith('msg_')?row.id.slice(4,16):createHash('sha256').update(row.id).digest('hex').slice(0,12);
 export function parseManagement(text) {
   if(typeof text!=='string')return;
-  const match=/^\/(help|status|queue|subscription|cancel|stop|new|reset|approve)(?:\s+([A-Za-z0-9_-]{1,256}))?\s*$/.exec(text);
+  const match=/^\/(help|status|queue|subscription|cancel|tasks|result|stop|new|reset|approve)(?:\s+([A-Za-z0-9_-]{1,256}))?\s*$/.exec(text);
   return match&&commands.has(match[1])?{name:match[1],argument:match[2]}:undefined;
 }
 
@@ -26,14 +26,14 @@ export class ChannelManagement {
   queue(anchor) {
     const key=routeOf(this.service.config,anchor.message)?.key,result=[];
     for(const row of this.store.db.prepare("SELECT id FROM channel_messages WHERE reply_state IN ('none','pending','processing','uncertain') AND expires>? ORDER BY rowid DESC LIMIT 1000").all(this.service.clock())){
-      if(this.marked(row.id))continue;
+      if(this.marked(row.id)||this.service.queue?.child(row.id))continue;
       const value=this.store.message(row.id);
       if(this.service.experience.get(row.id).streamState==='uncertain'||value.event_state==='uncertain')value.reply_state='uncertain';
       if(routeOf(this.service.config,value.message)?.key===key)result.push(value);
     }
     return result;
   }
-  respond(anchor,command) {return managementText({command,state:this.service.setup(),queue:this.queue(anchor),channelName:this.service.config.channel.name,cancel:row=>this.service.experience.cancel(row)});}
+  respond(anchor,command) {return managementText({command,state:this.service.setup(),queue:this.queue(anchor),channelName:this.service.config.channel.name,cancel:row=>this.service.experience.cancel(row),tasks:this.service.tasks});}
 
   handle(row,command) {
     this.mark(row.id);
@@ -42,11 +42,14 @@ export class ChannelManagement {
   }
 }
 
-export function managementText({command,state,queue,channelName,cancel}) {
+export function managementText({command,state,queue,channelName,cancel,tasks}) {
+    if (['tasks', 'result'].includes(command.name)) return tasks?.management(command) ?? '当前组件未提供任务记录。Task tracking is unavailable in this component.';
     if(command.name==='help')return [
       '/status — 连接、队列与订阅状态 / connection and queue status',
       '/queue — 当前会话待回复列表 / pending replies in this conversation',
       '/subscription — 订阅到期时间 / subscription expiry',
+      '/tasks — 任务与回复窗口剩余时间 / tracked tasks and remaining reply window',
+      '/result 编号 — 查询完整任务结果 / retrieve a saved task result',
       '/cancel [编号] — 取消尚未发送的回复；省略编号取消最近一条 / cancel an unsent reply',
       '处理已在发送中或结果不明时不会自动重发。Inflight and uncertain deliveries are preserved.',
       '/stop、/new、/reset、/approve 的原 dot 控制请在原平台操作。Hosted-dot controls stay on the original platform.',

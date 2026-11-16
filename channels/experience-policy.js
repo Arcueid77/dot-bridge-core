@@ -15,12 +15,14 @@ function list(value,max) {
 }
 
 export function interactionPolicy(input = {}, channel = {}) {
-  object(input,['version','feedback','context','replies','management','groups']);
+  object(input,['version','feedback','context','replies','management','groups','queue']);
   if(input.version!==undefined&&input.version!==1)fail();
   const feedback=input.feedback??{},context=input.context??{},replies=input.replies??{},management=input.management??{};
   object(feedback,['enabled','reaction','typing','streaming','lease_seconds','update_interval_ms','min_update_chars']);
   object(context,['max_messages','max_chars']);
   object(replies,['long_text']);object(management,['enabled']);
+  const queue = input.queue ?? {};
+  object(queue, ['mode', 'window_ms', 'max_messages']);
   const groups=input.groups??[];
   if(!Array.isArray(groups)||groups.length>50||(!channel.experience?.groups&&groups.length))fail();
   const seen=new Set();
@@ -37,6 +39,7 @@ export function interactionPolicy(input = {}, channel = {}) {
     context:Object.freeze({maxMessages:integer(context.max_messages,1,50,20),maxChars:integer(context.max_chars,1000,20000,12000)}),
     replies:Object.freeze({longText:choice(replies.long_text,['file','chunks'],'file')}),
     management:Object.freeze({enabled:boolean(management.enabled,!!channel.experience)}),groups:Object.freeze(rules),
+    queue:Object.freeze({mode:choice(queue.mode,['independent','serial','batch'],'independent'),windowMs:integer(queue.window_ms,0,3000,750),maxMessages:integer(queue.max_messages,2,20,5)}),
   });
 }
 

@@ -6,6 +6,7 @@ import {outboundDefinitions,isOutboundTool,validateOutboundArguments,projectOutb
 import {experienceDefinitions} from './experience-contract.js';
 import {uploadDefinitions,isUploadTool,validateUploadArguments,projectUploadResult,UPLOAD_RPC_BYTES} from './uploads.js';
 import {choiceDefinitions,isChoiceTool,validateChoiceArguments,projectChoiceResult} from './choices.js';
+import {taskDefinitions,isTaskTool,validateTaskArguments,projectTaskResult} from './tasks.js';
 
 const bool={type:'boolean'},str={type:'string'},empty={type:'object',properties:{},additionalProperties:false};
 const schema=(properties,required=Object.keys(properties))=>({type:'object',properties,required,additionalProperties:false});
@@ -17,7 +18,7 @@ export function definitions(channel){
  const tool=(name,description,inputSchema,outputSchema,readOnlyHint=true)=>({name,description,inputSchema,outputSchema,annotations:{readOnlyHint,destructiveHint:false,idempotentHint:true,openWorldHint:!readOnlyHint}});
  const pending=schema({message_id:id,reply_deadline:{type:'string',format:'date-time'},reply_status:status});
  const setup=schema({...runtimeStatusProperties(),callback_hostname:{type:['string','null']},callback_policy:{type:'string',enum:['not_provided','invalid','not_allowlisted','allowlisted']},pending_messages:{type:'array',maxItems:10,items:pending}},['binding_ready','gateway_connected','subscription_active','callback_hostname','callback_policy','pending_messages','subscription_diagnostics']);
- const message=schema({message_id:id,conversation:{type:'string',enum:scopes},text:{type:'string',maxLength:20000},attachments:{type:'array',maxItems:10,items:schema({kind:str,name:str,mimeType:str},['kind'])},reply_deadline:{type:'string',format:'date-time'},reply_status:status,...(channel.experience?{context_key:{type:'string',minLength:64,maxLength:64},quote:schema({text:{type:'string',maxLength:4000},truncated:{type:'boolean'}},['text'])}:{})},['message_id','conversation','text','attachments','reply_deadline','reply_status']);
+ const message=schema({message_id:id,conversation:{type:'string',enum:scopes},text:{type:'string',maxLength:20000},source_message_ids:{type:'array',minItems:1,maxItems:20,items:id},attachments:{type:'array',maxItems:10,items:schema({kind:str,name:str,mimeType:str},['kind'])},reply_deadline:{type:'string',format:'date-time'},reply_status:status,...(channel.experience?{context_key:{type:'string',minLength:64,maxLength:64},quote:schema({text:{type:'string',maxLength:4000},truncated:{type:'boolean'}},['text'])}:{})},['message_id','conversation','text','attachments','reply_deadline','reply_status']);
  const reply=schema({message_id:id,status});
  const input=schema({message_id:id});
  const setupInput=schema({callback_url:{type:'string',maxLength:2048}},[]);
@@ -39,6 +40,7 @@ export function definitions(channel){
  liveTools.push(...outboundDefinitions(c));
  if(media.reply.length)liveTools.push(...uploadDefinitions(c,media.reply));
  liveTools.push(...choiceDefinitions(c));
+ liveTools.push(...taskDefinitions(c));
  return {backendSetupTool,readinessTool,liveReadinessTool,liveTools,event};
 }
 function assertOutput(value,s){
@@ -61,6 +63,7 @@ export function createChannelAdapter(channel){
    if(isOutboundTool(c,name))return validateOutboundArguments(c,name,args);
    if(isUploadTool(c,name))return validateUploadArguments(c,name,args,media.reply);
    if(isChoiceTool(c,name))return validateChoiceArguments(c,name,args);
+   if(isTaskTool(c,name))return validateTaskArguments(c,name,args);
    const spec=d.liveTools.find(t=>t.name===name);if(!spec)throw new BridgeError('Unknown channel tool');
    object(args,Object.keys(spec.inputSchema.properties),spec.inputSchema.required);
    if(name===`reply_${c}_media`){const bytes=decodeMedia(args.data);try{validateMedia({type:args.type,data:bytes,mimeType:args.mime_type,name:args.name});}finally{bytes.fill(0);}}
@@ -72,6 +75,7 @@ export function createChannelAdapter(channel){
    if(isOutboundTool(c,call.name))return projectOutboundResult(c,call,result);
    if(isUploadTool(c,call.name))return projectUploadResult(c,call,result,media.reply);
    if(isChoiceTool(c,call.name))return projectChoiceResult(c,call,result);
+   if(isTaskTool(c,call.name))return projectTaskResult(c,call,result);
    object(result,['content','isError','structuredContent','resultType','_meta'],['isError','structuredContent']);if(result.isError!==false)throw Error();
    const spec=[...d.liveTools,d.backendSetupTool,d.liveReadinessTool].find(t=>t.name===call.name);if(!spec)throw Error();
    assertOutput(result.structuredContent,spec.outputSchema);

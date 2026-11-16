@@ -102,6 +102,18 @@ test('native choices bind actor, conversation and topic and accept one winner ac
   assert.equal(seen[0].replyContext.choiceSourceId, 'source');
 });
 
+test('signed LINE postbacks use an acknowledged prompt token and retain sender and chat binding', t => {
+  const f = fixture(t);
+  const choices = new SourceChoices({...f.options, requirePromptReceipt: false});
+  const input = {...f.input, message: {...f.input.message, id: 'signed-postback-event'}};
+  assert.equal(choices.select({...input, senderId: 'other'}).accepted, false);
+  assert.equal(choices.select({...input, conversationId: 'other'}).accepted, false);
+  assert.equal(choices.select({...input, message: {...input.message, conversationId: 'other'}}).accepted, false);
+  assert.equal(choices.select(input).accepted, true);
+  assert.equal(choices.select(input).accepted, true);
+  assert.equal(choices.result('source').selection.id, 'pdf');
+});
+
 test('a durably accepted selection resumes after restart and retains idempotent source identity', async (t) => {
   const f = fixture(t);
   f.choices.select(f.input);

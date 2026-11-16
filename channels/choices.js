@@ -115,8 +115,8 @@ export function projectChoiceResult(channel, call, result) {
 }
 
 export class SourceChoices {
-  constructor({ db, seal, open, authorize, clock = Date.now }) {
-    Object.assign(this, { db, seal, open, authorize, clock });
+  constructor({ db, seal, open, authorize, clock = Date.now, requirePromptReceipt = true }) {
+    Object.assign(this, { db, seal, open, authorize, clock, requirePromptReceipt });
     db.exec(`CREATE TABLE IF NOT EXISTS dotbridge_choices(source_id TEXT PRIMARY KEY,digest TEXT NOT NULL,payload TEXT NOT NULL,expires INTEGER NOT NULL,selected INTEGER NOT NULL DEFAULT 0,dispatched INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS dotbridge_choice_tokens(token TEXT PRIMARY KEY,source_id TEXT NOT NULL);`);
   }
@@ -232,7 +232,7 @@ export class SourceChoices {
       }
       const payload = this.open(row.payload, 'choices:' + row.source_id),
         binding = payload.binding;
-      if (!binding.promptMessageId || input.message?.id !== binding.promptMessageId)
+      if (!binding.promptMessageId || (this.requirePromptReceipt && input.message?.id !== binding.promptMessageId))
         return { accepted: false };
       if (
         input.senderId !== binding.senderId ||
