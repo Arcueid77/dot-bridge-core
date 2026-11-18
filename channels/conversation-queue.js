@@ -1,5 +1,6 @@
 import {BridgeError} from '../router/common.js';
 import {routeOf} from './experience-policy.js';
+import {MAX_MEDIA_BYTES} from './tunnel-budget.js';
 
 export class ConversationQueue {
   constructor(service) {
@@ -44,7 +45,7 @@ export class ConversationQueue {
     this.store.db.prepare('DELETE FROM channel_batches WHERE anchor_id NOT IN (SELECT id FROM channel_messages)').run();
     this.syncOutcomes();
     if (this.policy.mode !== 'batch') return;
-    const candidates = this.store.db.prepare("SELECT id FROM channel_messages WHERE event_state='pending' AND reply_state='none' AND expires>? ORDER BY created,rowid LIMIT 1000").all(now);
+    const candidates = this.store.db.prepare("SELECT id FROM channel_messages WHERE event_state='pending' AND event_attempts=0 AND reply_state='none' AND expires>? ORDER BY created,rowid LIMIT 1000").all(now);
     const groups = new Map();
     for (const candidate of candidates) {
       const row = this.store.message(candidate.id);
@@ -87,8 +88,10 @@ export class ConversationQueue {
   canDispatch(row) {
     if (this.policy.mode === 'independent') return true;
     const key = routeOf(this.service.config, row.message).key;
-    const earlier = this.store.db.prepare("SELECT id FROM channel_messages WHERE rowid<? AND expires>? AND subscription_id=? AND reply_state IN ('none','pending','processing') AND event_state IN ('processing','delivered','uncertain') ORDER BY rowid LIMIT 1000")
-      .all(row.accepted_order, this.service.clock(), row.subscription_id);
+    const earlier = this.store.db.prepare(`SELECT id FROM channel_messages WHERE rowid<? AND expires>? AND subscription_id=?
+      AND reply_state IN ('none','pending','processing') AND event_state IN ('pending','processing','delivered','uncertain')
+      AND NOT EXISTS(SELECT 1 FROM channel_reply_hold WHERE message_id=channel_messages.id AND bytes>?) ORDER BY rowid LIMIT 1000`)
+      .all(row.accepted_order, this.service.clock(), row.subscription_id, MAX_MEDIA_BYTES);
     const blocked = earlier.some(item => !this.child(item.id) && routeOf(this.service.config, this.store.message(item.id).message)?.key === key);
     if (blocked) this.store.db.prepare("UPDATE channel_messages SET event_next_at=? WHERE id=? AND event_state='pending'").run(this.service.clock() + 500, row.id);
     return !blocked;

@@ -66,7 +66,7 @@ export class LegacyConversationQueue {
     const order=this.store.get('SELECT rowid AS n FROM messages WHERE id=?',message.id).n;
     const prior=this.store.all(`SELECT m.id FROM messages m JOIN jobs j ON j.message_id=m.id
       WHERE m.rowid<? AND m.subscription_id=? AND m.generation=? AND m.expires>?
-      AND j.kind='event' AND j.state IN ('processing','delivered','uncertain') ORDER BY m.rowid LIMIT 1000`,
+      AND j.kind='event' AND j.state IN ('pending','processing','delivered','uncertain') ORDER BY m.rowid LIMIT 1000`,
       order,message.subscription_id,message.generation,this.clock());
     return !prior.some(row=>{
       if(this.anchor(row.id)!==row.id)return false;

@@ -1,16 +1,18 @@
 import {createHash} from 'node:crypto';
 import {BridgeError} from '../router/common.js';
 import {validateToolValue} from './tool-schema.js';
-import {createSpeechSynthesizer} from '../audio/synthesis.js';
+import {createSpeechSynthesizer, MAX_M4A_SPEECH_SECONDS, MAX_SPEECH_SECONDS} from '../audio/synthesis.js';
 
 const object = (properties, required = Object.keys(properties)) => ({type: 'object', properties, required, additionalProperties: false});
 const messageId = {type: 'string', minLength: 1, maxLength: 256};
 const outcome = object({message_id: messageId,
   status: {type: 'string', enum: ['none','pending','processing','sent','expired','dead','cancelled','uncertain']}});
 const defaults = {qq: ['wav','audio'], weixin: ['wav','audio'], lark: ['opus','audio'],
-  telegram: ['opus','audio'], discord: ['opus','audio'], line: ['mp3','audio'],
+  telegram: ['opus','audio'], discord: ['opus','audio'], line: ['m4a','audio'],
   dingtalk: ['wav','file'], wecom: ['wav','file']};
 const mimeTypes = {wav: 'audio/wav', opus: 'audio/ogg', mp3: 'audio/mpeg', amr: 'audio/amr'};
+const m4aMimeType = 'audio/mp4';
+const durationLimit = id => id === 'line' ? MAX_M4A_SPEECH_SECONDS : MAX_SPEECH_SECONDS;
 
 export function speechDefinitions(channel) {
   const id = typeof channel === 'string' ? channel : channel.id;
@@ -20,8 +22,8 @@ export function speechDefinitions(channel) {
   return [
     tool(`check_${id}_speech`, 'Inspect protected local text-to-speech configuration, runtime and reply type. These observations describe local preparation; actual audio delivery uses the ordinary provider acknowledgement.', object({}), object({
       configured: {type: 'boolean'}, runtime_ready: {type: 'boolean'}, reply_configured: {type: 'boolean'},
-      delivery_kind: {type: 'string', enum: ['audio','file']}, mime_type: {type: 'string', enum: Object.values(mimeTypes)},
-      max_text_chars: {type: 'integer', const: 2000}, max_duration_seconds: {type: 'integer', const: 120},
+      delivery_kind: {type: 'string', enum: ['audio','file']}, mime_type: {type: 'string', enum: id==='line'?[m4aMimeType]:Object.values(mimeTypes)},
+      max_text_chars: {type: 'integer', const: 2000}, max_duration_seconds: {type: 'integer', const: durationLimit(id)},
       busy: {type: 'boolean'}, last_failure: {type: ['string','null'], enum: ['synthesis','normalize','encode',null]},
     }), true),
     tool(`reply_${id}_speech`, 'Synthesize this genuinely generated answer using the configured local voice and queue one audio or file reply in the original source conversation. Use the same idempotency_key for retries and inspect uncertain status. The complete text is retained in the tracked task for explicit owner lookup.',
@@ -56,8 +58,8 @@ export class SourceSpeech {
   }
   check() {
     return {...this.synthesizer.status(), reply_configured: this.providerReady() === true,
-      delivery_kind: this.profile.type, mime_type: mimeTypes[this.profile.format],
-      max_text_chars: 2000, max_duration_seconds: 120};
+      delivery_kind: this.profile.type, mime_type: this.profile.format==='m4a'?m4aMimeType:mimeTypes[this.profile.format],
+      max_text_chars: 2000, max_duration_seconds: durationLimit(this.channel)};
   }
   async reply(args) {
     args = validateSpeechArguments(this.channel, `reply_${this.channel}_speech`, args);

@@ -81,7 +81,7 @@ test('shared subscription diagnostic tracker preserves real code/stage and canno
 
 test('legacy SQLite status reads actual principal-bound expiry and all outbound jobs without exposing private callbacks',t=>{
  const db=new DatabaseSync(':memory:');t.after(()=>db.close());
- db.exec('CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT); CREATE TABLE subscriptions(id TEXT PRIMARY KEY,principal TEXT,callback TEXT,active INTEGER,expires INTEGER,verified_until INTEGER); CREATE TABLE jobs(id TEXT PRIMARY KEY,kind TEXT,state TEXT);');
+ db.exec('CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT); CREATE TABLE subscriptions(id TEXT PRIMARY KEY,principal TEXT,callback TEXT,active INTEGER,expires INTEGER,verified_until INTEGER); CREATE TABLE jobs(id TEXT PRIMARY KEY,kind TEXT,state TEXT,message_id TEXT); CREATE TABLE messages(id TEXT PRIMARY KEY,expires INTEGER,received INTEGER,principal TEXT);');
  // Opaque vault fixture tests the delegation boundary; provider tests exercise
  // their existing AES vault. No replacement encryption is used in production.
  const sealed=new Map();let nonce=0;
@@ -91,18 +91,22 @@ test('legacy SQLite status reads actual principal-bound expiry and all outbound 
  const options={principal:'fixture-owner',now,callbackHosts:['callback.example.com'],bindingReady:true,gatewayConnected:true,callbackAllowed:()=>true,wrongSettingPresent:true};
  const empty=inspectLegacyRuntimeStatus(store,options);assert.equal(empty.subscription_status.state,'none');assert.equal(empty.connection_status.diagnostic_history,'unavailable');
  add('current','fixture-owner',1,now+60000,now-20);add('expired','fixture-owner',1,now-1,now-10);add('other-owner','other-private-owner',1,now+120000,now);
- for(let i=0;i<18;i++)store.run('INSERT INTO jobs VALUES (?,?,?)',`outbound-${i}`,i<12?'reply':i<16?'stream':'feedback',i<12?'pending':i<16?'processing':'uncertain');
- store.run('INSERT INTO jobs VALUES (?,?,?)','event','event','pending');
+ for(let i=0;i<18;i++)store.run('INSERT INTO jobs(id,kind,state) VALUES (?,?,?)',`outbound-${i}`,i<12?'reply':i<16?'stream':'feedback',i<12?'pending':i<16?'processing':'uncertain');
+ store.run('INSERT INTO messages VALUES (?,?,?,?)','fixture-source',now+60000,now,'fixture-owner');
+ store.run('INSERT INTO jobs VALUES (?,?,?,?)','event','event','uncertain','fixture-source');
  const before=store.get('SELECT total_changes() AS n').n,status=inspectLegacyRuntimeStatus(store,options);
  assert.equal(status.subscription_status.expires_at,new Date(now+60000).toISOString());assert.equal(status.subscription_active,true);
  assert.deepEqual(status.reply_work,{pending:12,processing:4,uncertain:2});assert.equal(store.get('SELECT total_changes() AS n').n,before);
+ assert.equal(status.delivery_activity.latest.callback_state,'uncertain');
+ assert.equal(status.delivery_activity.latest.reply_submitted,false);
+ assert.equal(status.delivery_activity.callbacks.uncertain,1);
  assert.equal(status.connection_status.callback_setting_name,'MCP_CALLBACK_ALLOWED_HOSTS');assert.equal(status.connection_status.wrong_callback_setting_present,true);
  assert.equal(Object.hasOwn(status.connection_status,'legacy_callback_alias_present'),false);
  for(const token of ['private-path','private-signing-secret','fixture-owner','other-private-owner','current'])assert.equal(JSON.stringify(status).includes(token),false);
  assert.equal(inspectLegacyRuntimeStatus(store,{...options,callbackAllowed:()=>false}).subscription_active,false);
  assert.equal(Object.hasOwn(inspectLegacyRuntimeStatus(store,{...options,gatewayConnected:undefined}),'gateway_connected'),false);
- db.exec('ALTER TABLE jobs ADD COLUMN message_id TEXT; CREATE TABLE messages(id TEXT PRIMARY KEY,expires INTEGER); CREATE TABLE feedback(message_id TEXT PRIMARY KEY,payload TEXT NOT NULL,state TEXT NOT NULL,next_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,lease_until INTEGER,lease_token TEXT); CREATE TABLE reply_streams(message_id TEXT PRIMARY KEY,payload TEXT NOT NULL,state TEXT NOT NULL,sequence INTEGER NOT NULL DEFAULT 0,applied_sequence INTEGER NOT NULL DEFAULT -1);');
- const feedback=(id,state,{expires=now+120000,reactionId='private-reaction',uncertain=false,lease=now+60000}={})=>{store.run('INSERT INTO messages VALUES (?,?)',id,expires);store.run('INSERT INTO feedback(message_id,payload,state,next_at,lease_until) VALUES (?,?,?,?,?)',id,vault.seal({reactionId,uncertain},`feedback:${id}`),state,now,lease);};
+ db.exec('CREATE TABLE feedback(message_id TEXT PRIMARY KEY,payload TEXT NOT NULL,state TEXT NOT NULL,next_at INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,lease_until INTEGER,lease_token TEXT); CREATE TABLE reply_streams(message_id TEXT PRIMARY KEY,payload TEXT NOT NULL,state TEXT NOT NULL,sequence INTEGER NOT NULL DEFAULT 0,applied_sequence INTEGER NOT NULL DEFAULT -1);');
+ const feedback=(id,state,{expires=now+120000,reactionId='private-reaction',uncertain=false,lease=now+60000}={})=>{store.run('INSERT INTO messages(id,expires) VALUES (?,?)',id,expires);store.run('INSERT INTO feedback(message_id,payload,state,next_at,lease_until) VALUES (?,?,?,?,?)',id,vault.seal({reactionId,uncertain},`feedback:${id}`),state,now,lease);};
  feedback('a','pending');feedback('b','active');feedback('c','working');feedback('d','uncertain');feedback('e','done');
  assert.deepEqual(inspectLegacyRuntimeStatus(store,options).reply_work,{pending:13,processing:5,uncertain:3});
  feedback('stale-working','working',{lease:now-1});feedback('terminal-cleanup','active',{expires:now-1});feedback('missing-indicator','active',{reactionId:null});feedback('active-unknown','active',{uncertain:true});

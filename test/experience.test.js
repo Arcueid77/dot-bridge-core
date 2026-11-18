@@ -11,13 +11,13 @@ import {windowsWritePrivateFile} from '../packages/dot-bridge-platform/index.js'
 
 const channel={id:'fixture',name:'Fixture',envPrefix:'FIXTURE',defaultPort:8799,maxReplyText:20000,experience:{groups:true,streaming:true}};
 const group=(conversation_id,other={})=>({conversation_id,members:'all',mention:true,auto_reply:'off',...other});
-function fixture(t,policy={}){
+function fixture(t,policy={},callbackStatus=()=>200){
   const dir=privateMkdtempSync(path.join(os.tmpdir(),'dot-experience-'));cleanupPrivateFixture(t,dir);
   const write=(name,value)=>{const file=path.join(dir,name);if(process.platform==='win32')windowsWritePrivateFile(file,Buffer.from(value));else fs.writeFileSync(file,value,{mode:0o600});return file;};
   const locks=path.join(dir,'locks');privateMkdirSync(locks,{mode:0o700});
   const env={AUTH_MODE:'tunnel-service',BRIDGE_MODE:'tunnel',TUNNEL_SERVICE_OPERATION:'live',TUNNEL_SERVICE_OWNER_ID:'tunnel-owner:dot-bridge',TUNNEL_SERVICE_KEY_FILE:write('service.key',Buffer.alloc(32,31).toString('base64url')),CALLBACK_TRANSPORT_MODE:'standard',CALLBACK_HOSTS:'callback.example.com',FIXTURE_CREDENTIALS_FILE:write('credentials.json',JSON.stringify({ownerId:'owner',conversationId:'dm',botToken:'synthetic'})),STORAGE_KEY_FILE:write('storage.key',Buffer.alloc(32,32).toString('base64')),DATABASE_PATH:path.join(dir,'bridge.sqlite'),BRIDGE_LOCK_DIRECTORY:locks,DOT_BRIDGE_INTERACTION_POLICY_FILE:write('interaction.json',JSON.stringify({version:1,...policy}))};
   const config=createChannelConfig(channel,env),events=[],calls=[],progress=[],feedback=[];
-  const transport=async(_url,{body,beforeConnect})=>{beforeConnect();const value=JSON.parse(body);if(value.type==='verification')return {status:200,body:Buffer.from(JSON.stringify({challenge:value.challenge}))};events.push(value);return {status:200,body:Buffer.from('{}')};};
+  const transport=async(_url,{body,beforeConnect})=>{beforeConnect();const value=JSON.parse(body);if(value.type==='verification')return {status:200,body:Buffer.from(JSON.stringify({challenge:value.challenge}))};events.push(value);return {status:callbackStatus(value),body:Buffer.from('{}')};};
   transport.preflight=()=>({ready:true});
   let service;
   const open=(overrides={},clock=Date.now)=>service=new ChannelService(config,{transport,clock,createProvider:()=>({start:async()=>{},stop:async()=>{},status:()=>({connected:true}),sendReply:async value=>{value.authorize();calls.push(value);},setFeedback:async value=>{value.authorize();feedback.push(value.active);return 'private-reaction-ref';},setTyping:async()=>{},sendProgress:async value=>{value.authorize();progress.push(value);return value.reference??{id:'private-native-message'};},finishProgress:async()=>{},...overrides})});
@@ -132,6 +132,48 @@ test('serial dispatch releases the next source after the preceding final reply',
   await settle(service);
   assert.equal(f.events.length, 2);
   assert.equal(f.events[1].data.message_id, next);
+});
+
+test('serial dispatch waits for a callback retry without blocking other conversations',async t=>{
+  let now=Date.now(), firstAttempts=0;
+  const f=fixture(t,{queue:{mode:'serial'},groups:[group('elsewhere')]},event=>
+    event.data.text==='first question'&&++firstAttempts===1?503:200);
+  const service=f.open({},()=>now);
+  await service.subscribe(sub('configured'));
+  const first=await service.ingest(owner('retry-first','first question'));
+  const second=await service.ingest(owner('retry-second','follow-up'));
+  const other=await service.ingest(message('parallel','elsewhere'));
+  await settle(service);
+  assert.deepEqual(f.events.map(event=>event.data.message_id),[first,other]);
+  now+=1001;await settle(service);
+  assert.deepEqual(f.events.map(event=>event.data.message_id),[first,other,first]);
+  service.call('reply_to_fixture',{message_id:first,text:'finished',idempotency_key:'first'});
+  await settle(service);
+  now+=501;await settle(service);
+  assert.deepEqual(f.events.map(event=>event.data.message_id),[first,other,first,second]);
+});
+
+test('retained terminal records cannot hide new feedback or unfinished cleanup',async t=>{
+  const now=Date.now(), f=fixture(t,{feedback:{enabled:true}});
+  const typing=[];
+  const service=f.open({setTyping:async({message,active})=>typing.push([message.id,active])},()=>now);
+  await service.subscribe(sub());
+  service.store.tx(()=>{
+    for(let index=0;index<1000;index++){
+      const message=owner('terminal-'+index);
+      message.route=conversationRoute(f.config,message);
+      const id=service.store.insert(message,now-86400000,now-86000000);
+      service.experience.accepted(service.store.message(id));
+      if(index===0)service.experience.save(id,{...service.experience.get(id),feedbackApplied:true,feedbackReference:'fixture'},false);
+    }
+    service.store.db.exec("UPDATE channel_messages SET event_state='delivered',reply_state='sent'");
+  });
+  const newest=await service.ingest(owner('latest'));
+  service.call('begin_fixture_reply',{message_id:newest});
+  await settle(service);
+  assert.deepEqual(f.feedback,[true,false]);
+  assert.deepEqual(typing,[['latest',true]]);
+  assert.equal(service.experience.get(newest).feedbackApplied,true);
 });
 
 test('native choice delivery binds its positive receipt before accepting a click',async t=>{

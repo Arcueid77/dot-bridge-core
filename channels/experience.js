@@ -6,17 +6,34 @@ export class ChannelExperience {
   constructor(service) {
     this.service=service;this.store=service.store;this.policy=service.config.interaction??interactionPolicy({},service.config.channel);
     this.store.db.exec('CREATE TABLE IF NOT EXISTS channel_experience(message_id TEXT PRIMARY KEY,payload TEXT NOT NULL,inflight INTEGER NOT NULL DEFAULT 0);');
-    for(const row of this.store.db.prepare('SELECT message_id FROM channel_experience WHERE inflight=1').all()){
-      const value=this.get(row.message_id);this.save(row.message_id,{...value,streamState:'uncertain'},false);
-    }
+    this.store.tx(()=>{
+      for(const row of this.store.db.prepare('SELECT message_id,payload,inflight FROM channel_experience').iterate()){
+        const value=this.store.open(row.payload,'experience:'+row.message_id);
+        if(row.inflight===1)this.save(row.message_id,{...value,streamState:'uncertain'},false);
+        else this.saveWork(row.message_id,value);
+      }
+    });
   }
   get(id) {
     const row=this.store.db.prepare('SELECT payload FROM channel_experience WHERE message_id=?').get(id);
     return row?this.store.open(row.payload,'experience:'+id):{phase:'received',sequence:0,text:'',lease:0,typingAt:0,feedbackApplied:false,streamState:'none'};
   }
   save(id,value,inflight) {
-    const busy=inflight===undefined?(this.store.db.prepare('SELECT inflight FROM channel_experience WHERE message_id=?').get(id)?.inflight??0):(inflight?1:0);
-    this.store.db.prepare('INSERT INTO channel_experience VALUES (?,?,?) ON CONFLICT(message_id) DO UPDATE SET payload=excluded.payload,inflight=excluded.inflight').run(id,this.store.seal(value,'experience:'+id),busy);
+    this.store.tx(()=>{
+      const busy=inflight===undefined?(this.store.db.prepare('SELECT inflight FROM channel_experience WHERE message_id=?').get(id)?.inflight??0):(inflight?1:0);
+      this.store.db.prepare('INSERT INTO channel_experience VALUES (?,?,?) ON CONFLICT(message_id) DO UPDATE SET payload=excluded.payload,inflight=excluded.inflight').run(id,this.store.seal(value,'experience:'+id),busy);
+      this.saveWork(id,value);
+    });
+  }
+  saveWork(id,value) {
+    const provider=this.service.provider;
+    const reaction=typeof provider.setFeedback==='function'&&value.feedbackApplied&&(value.feedbackFailures??0)<3;
+    const typing=typeof provider.setTyping==='function'&&value.typingActive&&(value.typingFailures??0)<3;
+    const uncertain=value.streamState==='uncertain';
+    const stream=typeof provider.finishProgress==='function'&&value.streamReference&&value.phase!=='finished'&&!uncertain&&(value.cleanupFailures??0)<3;
+    this.store.db.prepare(`INSERT INTO channel_experience_work(message_id,cleanup,uncertain) VALUES (?,?,?)
+      ON CONFLICT(message_id) DO UPDATE SET cleanup=excluded.cleanup,uncertain=excluded.uncertain`)
+      .run(id,Number(Boolean(reaction||typing||stream)),Number(uncertain));
   }
   accepted(row) { if(this.policy.feedback.enabled&&!row.message.control)this.save(row.id,this.get(row.id)); }
   status(row) { const value=this.get(row.id);return {message_id:row.id,status:value.streamState==='uncertain'?'uncertain':row.reply_state==='none'&&value.phase==='processing'&&value.lease>this.service.clock()?'processing':row.reply_state}; }
@@ -44,10 +61,23 @@ export class ChannelExperience {
   async tick() {
     const {service,store,policy}=this;
     store.db.prepare('DELETE FROM channel_experience WHERE message_id NOT IN (SELECT id FROM channel_messages)').run();
+    store.db.prepare('DELETE FROM channel_experience_work WHERE message_id NOT IN (SELECT message_id FROM channel_experience)').run();
+    const subscription=service.subscription(), subscriptionId=subscription?subscription.id+':'+subscription.generation:null;
+    const candidates=store.db.prepare(`WITH work AS (
+      SELECT e.message_id,e.rowid AS ordinal,w.cleanup,
+        m.subscription_id=? AND m.expires>? AND m.reply_state IN ('none','pending','processing')
+        AND m.event_state IN ('pending','processing','delivered','uncertain') AS active
+      FROM channel_experience e JOIN channel_messages m ON m.id=e.message_id
+      JOIN channel_experience_work w ON w.message_id=e.message_id)
+      SELECT message_id FROM work WHERE active OR cleanup=1 ORDER BY active DESC,ordinal LIMIT 1004`)
+      .all(subscriptionId,service.clock());
     let budget=4;
-    for(const item of store.db.prepare('SELECT message_id FROM channel_experience ORDER BY rowid LIMIT 1000').all()){
+    for(const item of candidates){
       const row=store.message(item.message_id);if(!row||row.message.control)continue;
-      let value=this.get(row.id);const terminal=['sent','cancelled','expired','uncertain'].includes(row.reply_state)||['cancelled','expired'].includes(row.event_state)||row.event_state==='uncertain'&&value.phase!=='processing'||row.expires<=service.clock()||!service.subscription();
+      let value=this.get(row.id);
+      const active=service.subscription();
+      const terminal=['sent','cancelled','expired','uncertain'].includes(row.reply_state)||['batched','cancelled','expired'].includes(row.event_state)||
+        row.event_state==='uncertain'&&value.phase!=='processing'||row.expires<=service.clock()||!active||row.subscription_id!==active.id+':'+active.generation;
       const authorize=()=>{if(service.closed)throw new Error('Stopping');if(!terminal)service.authorized(store.message(row.id));};
       if(typeof service.provider.setFeedback==='function'&&(policy.feedback.enabled||value.feedbackApplied)){
         const active=!terminal&&policy.feedback.enabled&&policy.feedback.reaction;

@@ -6,10 +6,14 @@ import {assertTrustedRuntimeFile, openAudioWorkLock} from './transcription.js';
 import {protectedMediaProcess} from './media-process.js';
 import {pcm16Wave, pcmWaveform} from './wav.js';
 
-const MAX_PCM_BYTES = 16000 * 2 * 120;
+const PCM_BYTES_PER_SECOND = 16000 * 2;
+export const MAX_SPEECH_SECONDS = 120;
+export const MAX_M4A_SPEECH_SECONDS = 60;
+// AAC needs space for encoder delay and padding in the final M4A duration.
+const AAC_PADDING_BYTES = 2 * 1024 * 2;
 const formats = {wav: {mimeType: 'audio/wav', name: 'voice.wav'},
   opus: {mimeType: 'audio/ogg', name: 'voice.ogg'}, mp3: {mimeType: 'audio/mpeg', name: 'voice.mp3'},
-  amr: {mimeType: 'audio/amr', name: 'voice.amr'}};
+  amr: {mimeType: 'audio/amr', name: 'voice.amr'}, m4a: {mimeType: 'audio/mp4', name: 'voice.m4a'}};
 
 function validateRuntime(env) {
   for (const name of ['espeak-ng', 'ffmpeg', 'prlimit', 'flock']) {
@@ -55,10 +59,12 @@ export function createSpeechSynthesizer({env = process.env, platform = process.p
         spoken = await execute('espeak-ng', ['--stdout', '-v', voice, '-s', '175', '--stdin'], input, options);
         authorize();
         stage = 'normalize';
+        const maxSeconds=format==='m4a'?MAX_M4A_SPEECH_SECONDS:MAX_SPEECH_SECONDS;
+        const pcmLimit=PCM_BYTES_PER_SECOND*maxSeconds-(format==='m4a'?AAC_PADDING_BYTES:0);
         pcm = await execute('ffmpeg', ['-nostdin', '-hide_banner', '-loglevel', 'error', '-protocol_whitelist', 'pipe',
-          '-i', 'pipe:0', '-t', '121', '-vn', '-map_metadata', '-1', '-threads', '1', '-ar', '16000', '-ac', '1',
-          '-c:a', 'pcm_s16le', '-f', 's16le', 'pipe:1'], spoken, {...options, limit: MAX_PCM_BYTES});
-        if (!pcm.length || pcm.length > MAX_PCM_BYTES || pcm.length % 2) throw new Error('Speech duration exceeded.');
+          '-i', 'pipe:0', '-t', String(maxSeconds+1), '-vn', '-map_metadata', '-1', '-threads', '1', '-ar', '16000', '-ac', '1',
+          '-c:a', 'pcm_s16le', '-f', 's16le', 'pipe:1'], spoken, {...options, limit: pcmLimit});
+        if (!pcm.length || pcm.length > pcmLimit || pcm.length % 2) throw new Error('Speech duration exceeded.');
         wave = pcm16Wave(pcm);
         authorize();
         if (format === 'wav') {
@@ -68,17 +74,23 @@ export function createSpeechSynthesizer({env = process.env, platform = process.p
           return {...formats.wav, data};
         }
         stage = 'encode';
-        const codec = format === 'opus' ? ['-ar', '48000', '-ac', '1', '-c:a', 'libopus', '-f', 'ogg'] :
-          format === 'mp3' ? ['-c:a', 'libmp3lame', '-f', 'mp3'] : ['-ar', '8000', '-c:a', 'libopencore_amrnb', '-f', 'amr'];
+        const codecs = {
+          opus: ['-ar', '48000', '-ac', '1', '-c:a', 'libopus', '-f', 'ogg'],
+          mp3: ['-c:a', 'libmp3lame', '-f', 'mp3'],
+          amr: ['-ar', '8000', '-c:a', 'libopencore_amrnb', '-f', 'amr'],
+          // With no explicit fragment flush, FFmpeg writes one complete movie
+          // with a duration header, even when the output is a pipe.
+          m4a: ['-c:a', 'aac', '-movflags', '+frag_custom', '-f', 'ipod'],
+        };
         encoded = await execute('ffmpeg', ['-nostdin', '-hide_banner', '-loglevel', 'error', '-protocol_whitelist', 'pipe',
-          '-i', 'pipe:0', '-vn', '-map_metadata', '-1', '-threads', '1', ...codec, 'pipe:1'], wave, options);
+          '-i', 'pipe:0', '-vn', '-map_metadata', '-1', '-threads', '1', ...codecs[format], 'pipe:1'], wave, options);
         authorize();
         if (!encoded.length || encoded.length > MAX_MEDIA_BYTES) throw new Error('Speech output exceeded its bound.');
         const data = encoded;
         encoded = undefined;
         lastFailure = null;
         return {...formats[format], data, ...(format === 'opus' ? {voice: {
-          durationSeconds: pcm.length / 32000, waveform: pcmWaveform(pcm).toString('base64'),
+          durationSeconds: pcm.length / PCM_BYTES_PER_SECOND, waveform: pcmWaveform(pcm).toString('base64'),
           sha256: createHash('sha256').update(data).digest('hex'),
         }} : {})};
       } catch (error) {

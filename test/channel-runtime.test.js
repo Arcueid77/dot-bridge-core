@@ -38,8 +38,8 @@ function transportFixture(){
  return {send,events,fail:()=>{failEvent=true;}};
 }
 const subscription=()=>({name:'fixture.message.created',arguments:{conversation:'owner'},delivery:{mode:'webhook',url:'https://callback.example.com/from-current-dot',secret:'whsec_'+Buffer.alloc(32,64).toString('base64')},ttlMs:600000});
-function serviceFixture(t,f,{failReply=false,transport=transportFixture()}={}){
- const calls=[];const service=new ChannelService(f.config(),{transport:transport.send,createProvider:({onMessage,state})=>({start:async()=>{},stop:async()=>{},status:()=>({connected:true}),sendReply:async args=>{calls.push(args);if(failReply)throw Error('Uncertain fixture send');},onMessage,state})});
+function serviceFixture(t,f,{failReply=false,transport=transportFixture(),clock=Date.now}={}){
+ const calls=[];const service=new ChannelService(f.config(),{clock,transport:transport.send,createProvider:({onMessage,state})=>({start:async()=>{},stop:async()=>{},status:()=>({connected:true}),sendReply:async args=>{calls.push(args);if(failReply)throw Error('Uncertain fixture send');},onMessage,state})});
  beforeFixtureCleanup(t,()=>service.close());return {service,calls,transport};
 }
 const incoming=(id='fixture-1')=>({id,senderId:'fixture-owner',conversationId:'fixture-chat',text:'private synthetic message',replyContext:{secret:'private-session-token'}});
@@ -94,6 +94,60 @@ test('callback policy, one subscription, unsubscribe generation and pending inbo
  const {secret,...delivery}=subscription().delivery;service.unsubscribe({name:subscription().name,arguments:{conversation:'owner'},delivery});
  assert.throws(()=>service.call('reply_to_fixture',{message_id:id,text:'revoked',idempotency_key:'revoked'}));
  await service.subscribe(subscription());await settle(service);assert.equal(transport.events.length,1);assert.throws(()=>service.call('get_fixture_message',{message_id:id}));
+});
+
+test('a delayed gone response can disable only the subscription revision that dispatched it',async t=>{
+ const f=fixture(t), transport=transportFixture(), verify=transport.send;
+ let entered=Promise.withResolvers(), release=Promise.withResolvers();
+ transport.send=Object.assign(async(url,request)=>{
+  if(JSON.parse(request.body).type==='verification')return verify(url,request);
+  request.beforeConnect();entered.resolve();await release.promise;
+  return {status:410,body:Buffer.from('{}')};
+ },{preflight:verify.preflight});
+ const {service}=serviceFixture(t,f,{transport});
+ const original=subscription();await service.subscribe(original);
+ for(const change of ['renew','replace','none']){
+  entered=Promise.withResolvers();release=Promise.withResolvers();
+  const before=service.subscription();
+  await service.ingest(incoming('gone-'+change));
+  const dispatch=service.working;
+  await Promise.race([entered.promise,dispatch.then(()=>assert.fail('Expected the callback to be in flight'))]);
+  try{
+   if(change==='replace'){
+    const {secret,...delivery}=original.delivery;
+    service.unsubscribe({name:original.name,arguments:original.arguments,delivery});
+   }
+   if(change!=='none')await service.subscribe(original);
+   if(change==='renew')assert.equal(service.subscription().generation,before.generation);
+   if(change==='replace')assert.notEqual(service.subscription().generation,before.generation);
+  }finally{release.resolve();await dispatch;}
+  assert.equal(Boolean(service.subscription()),change!=='none');
+ }
+});
+
+test('expired uncertain content leaves only deduplication and outcome records across restart',async t=>{
+ const f=fixture(t), transport=transportFixture();let now=Date.now();
+ const {service,calls}=serviceFixture(t,f,{transport,failReply:true,clock:()=>now});
+ await service.subscribe(subscription());
+ const reply=await service.ingest(incoming('unconfirmed-reply'));await settle(service);
+ service.call('reply_to_fixture',{message_id:reply,text:'synthetic',idempotency_key:'one-reply'});await settle(service);
+ assert.equal(service.store.message(reply).reply_state,'uncertain');
+ transport.fail();
+ const event=await service.ingest(incoming('unconfirmed-event'));await settle(service);
+ const activity=service.setup().delivery_activity;
+ assert.equal(activity.latest.callback_state,'uncertain');
+ assert.equal(activity.latest.reply_submitted,false);
+ assert.equal(activity.callbacks.uncertain,1);
+ assert.equal(JSON.stringify(activity).includes('private synthetic'),false);
+ now+=8*86400000;await settle(service);
+ assert.equal(service.store.message(event),undefined);assert.equal(service.store.message(reply),undefined);
+ assert.deepEqual(service.setup().delivery_activity.retained_uncertain,{callbacks:1,replies:1});
+ await service.close();
+ const {service:reopened}=serviceFixture(t,f,{clock:()=>now});
+ assert.equal(await reopened.ingest(incoming('unconfirmed-reply')),false);
+ assert.equal(await reopened.ingest(incoming('unconfirmed-event')),false);
+ assert.deepEqual(reopened.setup().delivery_activity.retained_uncertain,{callbacks:1,replies:1});
+ assert.equal(calls.length,1);
 });
 
 test('single-host mode lock fences duplicate consumers and readiness loads no provider configuration',async t=>{
@@ -365,9 +419,13 @@ test('pre-upgrade oversized queued media remains pending and encrypted across re
  const legacy={text:'',idempotencyKey:'legacy-once',media:{type:'file',data:Buffer.alloc(MAX_MEDIA_BYTES+1,65).toString('base64'),mimeType:'application/octet-stream',name:'legacy.bin'}};
  const sealed=service.store.seal(legacy,`reply:${id}`);service.store.db.prepare("UPDATE channel_messages SET reply=?,reply_digest='legacy-fixture',reply_state='pending' WHERE id=?").run(sealed,id);
  await service.drain();assert.equal(f.calls.length,0);assert.equal(service.store.message(id).reply_state,'pending');assert.equal(service.store.message(id).reply,sealed);
+ const later=await service.ingest(incoming('later-normal-message'));await settle(service);
+ assert.equal(service.store.message(later).event_state,'delivered');
+ assert.equal(service.setup().delivery_activity.held_replies,1);
  await service.close();let attempts=0;
  const next=new ChannelService(f.config,{transport:transportFixture().send,createProvider:()=>({start:async()=>{},stop:async()=>{},status:()=>({connected:true}),sendReply:async()=>{},readAttachment:async()=>{},sendMediaReply:async()=>{attempts++;}})});beforeFixtureCleanup(t,()=>next.close());
  await next.drain();assert.equal(attempts,0);assert.equal(next.store.message(id).reply_state,'pending');assert.equal(next.store.message(id).reply,sealed);assert.equal(next.setup().reply_work.pending,1);
+ assert.equal(next.setup().delivery_activity.held_replies,1);
 });
 
 test('maximum-sized attachment and reply traverse the actual authenticated router at the new safe limit',async t=>{

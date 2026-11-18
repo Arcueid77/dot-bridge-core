@@ -6,7 +6,7 @@ import {createChannelAdapter,definitions} from './contract.js';
 import {ChannelStore,hash} from './store.js';
 import {mediaCapabilities,validateMedia,decodeMedia,attachmentResult,mediaName,mediaMime,MAX_MEDIA_BYTES,MAX_MEDIA_BASE64,MEDIA_RPC_LIMIT} from './media.js';
 import {TUNNEL_ENVELOPE_BYTES} from './tunnel-budget.js';
-import {subscriptionDiagnostics,subscriptionStatus,connectionStatus,trackSubscriptionAttempt} from './status.js';
+import {subscriptionDiagnostics,subscriptionStatus,connectionStatus,trackSubscriptionAttempt,deliveryActivity} from './status.js';
 import {transcribeAudio} from '../audio/transcription.js';
 import {OwnerOutbox,isOutboundTool,OUTBOUND_INSTRUCTIONS} from './outbound.js';
 import {conversationRoute,routeOf,interactionPolicy,cleanQuote} from './experience-policy.js';
@@ -79,6 +79,13 @@ export class ChannelService{
   }catch(e){this.store.close();throw e;}
  }
  subscription(){const s=this.store.get('subscription');return s&&s.active&&s.expires>this.clock()?s:undefined;}
+ disableGoneSubscription(sub, epoch){
+  this.store.tx(()=>{
+   if((this.store.get('subscription_epoch')??0)!==epoch)return;
+   const current=this.store.get('subscription');
+   if(current?.active&&current.id===sub.id&&current.generation===sub.generation)this.store.set('subscription',{...current,active:false});
+  });
+ }
  policy(url){const u=validateCallbackUrl(url);if(!this.config.callbackHosts.includes(u.hostname))throw new BridgeError('Callback hostname requires separate approval',{status:403,code:-32015,data:{reason:'callback_policy_required',callback_hostname:u.hostname}});return u;}
  authorized(row,{allowExpired=false}={}){const sub=this.subscription();if(!row||(!allowExpired&&row.expires<=this.clock())||!conversationRoute(this.config,row.message))throw denied();if(row.message.control&&this.management.marked(row.id))return undefined;if(!sub||row.subscription_id!==`${sub.id}:${sub.generation}`||(routeOf(this.config,row.message)?.scope==='configured'&&(sub.scope??'owner')!=='configured'))throw denied();this.policy(sub.url);return sub;}
  async ingest(raw){
@@ -108,17 +115,39 @@ export class ChannelService{
   const subscription=subscriptionStatus(record,now,diagnostics);
   let callbackAllowed=false;try{callbackAllowed=this.config.callbackHosts.includes(callbackUrl(record?.url).hostname);}catch{}
   const replyWork={pending:0,processing:0,uncertain:0};
-  for(const row of this.store.db.prepare("SELECT reply_state,count(*) AS n FROM channel_messages WHERE reply_state IN ('pending','processing','uncertain') AND id NOT IN (SELECT source_id FROM channel_batch_members WHERE source_id<>anchor_id) GROUP BY reply_state").all())replyWork[row.reply_state]=row.n;
-  for(const item of this.store.db.prepare('SELECT e.message_id,e.inflight,m.reply_state FROM channel_experience e JOIN channel_messages m ON m.id=e.message_id').all()){
-   const state=this.experience.get(item.message_id);if(item.reply_state!=='uncertain'&&state.streamState==='uncertain')replyWork.uncertain++;
+   for(const row of this.store.db.prepare(`SELECT reply_state,count(*) AS n FROM channel_messages
+    WHERE reply_state IN ('pending','processing','uncertain')
+     AND id NOT IN (SELECT source_id FROM channel_batch_members WHERE source_id<>anchor_id)
+    GROUP BY reply_state`).all())replyWork[row.reply_state]=row.n;
+   for(const item of this.store.db.prepare(`SELECT e.inflight,m.reply_state,w.uncertain FROM channel_experience e
+    JOIN channel_messages m ON m.id=e.message_id JOIN channel_experience_work w ON w.message_id=e.message_id
+    WHERE e.inflight=1 OR w.uncertain=1`).all()){
+    if(item.reply_state!=='uncertain'&&item.uncertain===1)replyWork.uncertain++;
    else if(item.reply_state!=='processing'&&item.inflight===1)replyWork.processing++;
   }
+   const activity=this.deliveryActivity();
   const mediaReadiness=typeof providerStatus?.mediaPublisherConfigured==='boolean'?{reply_publisher_configured:providerStatus.mediaPublisherConfigured,...(typeof providerStatus.mediaPublisherRequired==='boolean'?{reply_publisher_required:providerStatus.mediaPublisherRequired}:{})}:undefined;
   const nativeLimit=this.config.channel.nativeMaxReplyText,longMode=this.config.channel.experience?this.experience.policy.replies.longText:this.config.channel.longReplyMode;
   const replyCapabilities=Number.isSafeInteger(nativeLimit)&&nativeLimit>0&&nativeLimit<=this.config.maxReplyText&&['file','chunks','none'].includes(longMode)?{max_text_chars:this.config.maxReplyText,native_text_chars:nativeLimit,long_reply_mode:longMode}:undefined;
   return {binding_ready:true,gateway_connected:gatewayConnected,subscription_active:!!this.subscription(),callback_hostname:hostname,callback_policy:policy,pending_messages:this.store.pending(now).filter(item=>{if(this.management.marked(item.message_id)||this.queue.child(item.message_id))return false;const route=conversationRoute(this.config,this.store.message(item.message_id).message);return !!route&&(route.scope==='owner'||record?.scope==='configured');}),subscription_diagnostics:diagnostics,
-   subscription_status:subscription,connection_status:connectionStatus({gatewayConnected,callbackHosts:this.config.callbackHosts,subscription,diagnostics,callbackAllowed,legacyAliasPresent:this.config.callbackHostsLegacyAliasPresent}),reply_work:replyWork,
+    subscription_status:subscription,connection_status:connectionStatus({gatewayConnected,callbackHosts:this.config.callbackHosts,subscription,diagnostics,callbackAllowed,legacyAliasPresent:this.config.callbackHostsLegacyAliasPresent}),reply_work:replyWork,delivery_activity:activity,
    media_limits:{read_bytes:this.media.read.length?MAX_MEDIA_BYTES:0,reply_bytes:this.media.reply.length?MAX_MEDIA_BYTES:0,mcp_body_bytes:MEDIA_RPC_LIMIT,tunnel_envelope_bytes:TUNNEL_ENVELOPE_BYTES},...(mediaReadiness?{media_readiness:mediaReadiness}:{}),...(replyCapabilities?{reply_capabilities:replyCapabilities}:{}),...(this.config.channel.experience?{experience_capabilities:{feedback_enabled:this.experience.policy.feedback.enabled,typing:typeof this.provider.setTyping==='function',reactions:typeof this.provider.setFeedback==='function',progressive_replies:!!this.config.channel.experience.streaming&&typeof this.provider.sendProgress==='function',recent_context:true,management_commands:this.experience.policy.management.enabled,configured_groups:this.experience.policy.groups.filter(group=>group.enabled).length,hosted_dot_controls:false}}:{})};
+ }
+ deliveryActivity(){
+  const {db}=this.store;
+  const latest=db.prepare(`SELECT m.created AS received_at,m.event_state AS callback_state,
+    CASE WHEN w.uncertain=1 THEN 'uncertain' ELSE m.reply_state END AS reply_state,m.reply IS NOT NULL AS reply_submitted
+    FROM channel_messages m LEFT JOIN channel_experience_work w ON w.message_id=m.id
+    WHERE m.event_state<>'batched' AND NOT EXISTS(SELECT 1 FROM channel_management WHERE message_id=m.id)
+    ORDER BY m.created DESC,m.rowid DESC LIMIT 1`).get();
+  const callbacks=db.prepare(`SELECT m.event_state AS state,count(*) AS n FROM channel_messages m
+    WHERE m.event_state IN ('pending','processing','uncertain')
+      AND NOT EXISTS(SELECT 1 FROM channel_management WHERE message_id=m.id) GROUP BY m.event_state`).all();
+  const {held}=db.prepare(`SELECT count(*) AS held FROM channel_reply_hold h JOIN channel_messages m ON m.id=h.message_id
+    WHERE h.bytes>? AND m.reply_state='pending'`).get(MAX_MEDIA_BYTES);
+  const retained=db.prepare(`SELECT coalesce(sum(event_uncertain),0) AS callbacks,coalesce(sum(reply_uncertain),0) AS replies
+    FROM channel_delivery_tombstones`).get();
+  return deliveryActivity(latest,callbacks,{heldReplies:held,retained});
  }
  async subscribe(params){
   return trackSubscriptionAttempt(params,diagnostic=>this.subscribeVerified(params,diagnostic),{clock:this.clock,
@@ -144,7 +173,7 @@ export class ChannelService{
   this.store.tx(()=>{
    if((this.store.get('subscription_epoch')??0)!==epoch)throw denied();
    const active=this.subscription();if(active&&active.id!==id)throw denied();
-   const generation=existing?.generation??randomBytes(16).toString('hex');
+   const generation=active?.generation??randomBytes(16).toString('hex');
    this.store.set('subscription',{id,generation,url:params.delivery.url,secret:params.delivery.secret,expires,active:true,scope:params.arguments.conversation});
    this.store.set('subscription_epoch',epoch+1);
    for(const candidate of this.store.db.prepare("SELECT id FROM channel_messages WHERE subscription_id IS NULL AND event_state='pending' AND reply_state='none' AND expires>?").all(this.clock())){
@@ -285,19 +314,30 @@ export class ChannelService{
   if(this.closed)return;const now=this.clock();this.store.purge(now);this.store.db.prepare('DELETE FROM channel_management WHERE message_id NOT IN (SELECT id FROM channel_messages)').run();this.uploads.purge();this.tasks.purge();this.queue.prepare();await this.choices.dispatch(message=>this.ingest(message),action=>this.outbox.call(`${action.action}_${this.config.channel.id}_scheduled_message`,{outbound_id:action.outbound_id,expected_revision:action.expected_revision}));this.replyParts.cleanup();await this.experience.tick();await this.outbox.tick();
   for(let i=0;i<20&&!this.closed;i++){
    const sub=this.subscription(),subscriptionId=sub?`${sub.id}:${sub.generation}`:null;
-   const row=this.store.db.prepare("SELECT id FROM channel_messages WHERE expires>? AND id NOT IN (SELECT source_id FROM channel_batch_members WHERE source_id<>anchor_id) AND ((reply_state='pending' AND (subscription_id=? OR EXISTS(SELECT 1 FROM channel_management WHERE message_id=channel_messages.id))) OR (subscription_id=? AND event_state='pending' AND reply_state='none' AND event_next_at<=?)) ORDER BY CASE reply_state WHEN 'pending' THEN 0 ELSE 1 END,created LIMIT 1").get(this.clock(),subscriptionId,subscriptionId,this.clock());
+    const row=this.store.db.prepare(`SELECT id FROM channel_messages WHERE expires>?
+     AND id NOT IN (SELECT source_id FROM channel_batch_members WHERE source_id<>anchor_id)
+     AND ((reply_state='pending' AND (subscription_id=? OR EXISTS(SELECT 1 FROM channel_management WHERE message_id=channel_messages.id))
+      AND NOT EXISTS(SELECT 1 FROM channel_reply_hold WHERE message_id=channel_messages.id AND bytes>?))
+      OR (subscription_id=? AND event_state='pending' AND reply_state='none' AND event_next_at<=?))
+     ORDER BY CASE reply_state WHEN 'pending' THEN 0 ELSE 1 END,created,rowid LIMIT 1`)
+     .get(this.clock(),subscriptionId,MAX_MEDIA_BYTES,subscriptionId,this.clock());
    if(!row)return;const message=this.store.message(row.id);const replying=message.reply_state==='pending',column=replying?'reply_state':'event_state';
    if(!replying&&!this.queue.canDispatch(message))continue;
    try{this.authorized(message);}catch{this.store.db.prepare(`UPDATE channel_messages SET ${column}='cancelled' WHERE id=?`).run(row.id);continue;}
    // A pre-upgrade oversized queued reply is already encrypted approved work.
    // Keep it pending for an explicit rollback/recovery; do not claim an
    // uncertain send when no provider request has been attempted.
-   if(replying){const queued=this.store.open(message.reply,`reply:${row.id}`);if(typeof queued.media?.data==='string'&&(queued.media.data.length>MAX_MEDIA_BASE64||Buffer.byteLength(queued.media.data,'base64')>MAX_MEDIA_BYTES))return;}
+    const reply=replying?this.store.open(message.reply,`reply:${row.id}`):undefined;
+    const mediaData=reply?.media?.data;
+    if(typeof mediaData==='string'&&(mediaData.length>MAX_MEDIA_BASE64||Buffer.byteLength(mediaData,'base64')>MAX_MEDIA_BYTES)){
+     const bytes=Math.max(MAX_MEDIA_BYTES+1,Buffer.byteLength(mediaData,'base64'));
+     this.store.db.prepare('INSERT OR REPLACE INTO channel_reply_hold(message_id,bytes) VALUES (?,?)').run(row.id,bytes);
+     continue;
+    }
    this.store.db.prepare(`UPDATE channel_messages SET ${column}='processing' WHERE id=? AND ${column}='pending'`).run(row.id);
    if(!replying)this.store.db.prepare('UPDATE channel_messages SET event_attempts=event_attempts+1 WHERE id=?').run(row.id);
    try{
     if(replying){
-     const reply=this.store.open(message.reply,`reply:${row.id}`);
      const authorize=()=>{if(this.closed)throw denied();this.authorized(this.store.message(row.id));};authorize();
      if(await this.replyParts.send(message,reply,authorize)||await this.experience.sendFinal(message,reply,authorize)){
       // Final text edits the already acknowledged native progress message.
@@ -308,11 +348,14 @@ export class ChannelService{
      this.store.db.prepare("UPDATE channel_messages SET reply_state='sent' WHERE id=?").run(row.id);
     }else{
      const eventId=`evt_${hash(row.id)}`,body=Buffer.from(JSON.stringify({eventId,name:this.definitions.event.name,timestamp:new Date(message.message.timestamp).toISOString(),data:{message_id:row.id,conversation:routeOf(this.config,message.message)?.scope??'owner',text:this.queue.text(message),reply_deadline:new Date(message.expires).toISOString(),attachments:message.message.attachments.length},cursor:null}));
-     const response=await this.transport(sub.url,{hosts:this.config.callbackHosts,headers:webhookHeaders(sub,eventId,body,this.clock()),body,signal:this.controller.signal,beforeConnect:()=>this.authorized(this.store.message(row.id))});
+      const epoch=this.store.get('subscription_epoch')??0;
+      const response=await this.transport(sub.url,{hosts:this.config.callbackHosts,headers:webhookHeaders(sub,eventId,body,this.clock()),body,signal:this.controller.signal,beforeConnect:()=>this.authorized(this.store.message(row.id))});
      if(response.status<200||response.status>=300){
-      if(response.status===410)this.store.set('subscription',{...sub,active:false});
+       if(response.status===410)this.disableGoneSubscription(sub,epoch);
       const attempts=this.store.message(row.id).event_attempts,retryable=response.status===408||response.status===429||response.status>=500;
-      this.store.db.prepare('UPDATE channel_messages SET event_state=?,event_next_at=? WHERE id=?').run(retryable&&attempts<5?'pending':'cancelled',this.clock()+Math.min(30000,1000*2**(attempts-1)),row.id);continue;
+       const current=this.subscription();
+       const sameGeneration=current?.id===sub.id&&current?.generation===sub.generation;
+       this.store.db.prepare('UPDATE channel_messages SET event_state=?,event_next_at=? WHERE id=?').run(retryable&&attempts<5&&sameGeneration?'pending':'cancelled',this.clock()+Math.min(30000,1000*2**(attempts-1)),row.id);continue;
      }
      this.store.db.prepare("UPDATE channel_messages SET event_state='delivered' WHERE id=?").run(row.id);
     }

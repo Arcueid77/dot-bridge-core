@@ -164,3 +164,25 @@ test('only an explicitly confirmed known rejection can retry the same one-time i
   const pending=unknown.box.call('send_telegram_message',send());await unknown.box.tick();
   assert.throws(()=>unknown.box.call('retry_telegram_outbound',{outbound_id:pending.outbound_id,expected_revision:1,confirm:true}));
 });
+
+test('an expired rejection stays visible but cannot send after its text was cleared',async t=>{
+ const f=fixture(t,{send:async()=>{throw new OutboundRejection('provider_rejected');}});
+ const saved=f.box.call('send_telegram_message',send());
+ await f.box.tick();
+ f.time('2026-11-10T01:00:00Z');
+ const args={outbound_id:saved.outbound_id,expected_revision:1,confirm:true};
+ const rejectExpired=()=>assert.throws(()=>f.box.call('retry_telegram_outbound',args),error=>error.data?.reason==='content_expired');
+ rejectExpired(); // The age check also fences a retry before background cleanup.
+ await f.box.tick();
+ assert.equal(f.box.call('get_telegram_outbound',{outbound_id:saved.outbound_id}).text,'');
+ rejectExpired();
+ assert.equal(f.box.row(saved.outbound_id).state,'rejected');
+ // Reopen a row an older version already accepted for a retry with empty text.
+ f.db.prepare("UPDATE dotbridge_outbound SET state='pending',due=?,revision=2 WHERE id=?")
+  .run(Date.parse('2026-11-10T01:00:00Z'),saved.outbound_id);
+ await f.box.close();
+ const reopened=new OwnerOutbox({...f.settings,send:async args=>f.sent.push(args)});
+ await reopened.tick();assert.equal(f.sent.length,0);
+ assert.equal(reopened.row(saved.outbound_id).state,'expired');
+ assert.equal(reopened.row(saved.outbound_id).last_status,'rejected');
+});

@@ -6,7 +6,7 @@
 
 受保护交互配置中的 `queue.mode` 支持 `independent`、`serial`、`batch`，默认 independent。`window_ms` 为 0–3000，`max_messages` 为 2–20。合并只处理同一会话、话题、成员范围和订阅代次中尚未读取的纯文字，保留每条来源与唯一锚点及结果。QQ、飞书通过共享适配器继续使用原数据库和租约工作器。
 
-Linux 可配置 `DOT_BRIDGE_SPEECH_SYNTHESIS=local-espeak`、`DOT_BRIDGE_SPEECH_VOICE=zh`，复用受保护音频 guard 与共享锁。管理员安装 `/usr/bin/espeak-ng`、FFmpeg、prlimit、flock。`check_<channel>_speech` 返回实际本地准备状态，`reply_<channel>_speech` 接收最多 2000 字符、120 秒的回答并保存完整文字。QQ／微信使用原生语音，飞书／Telegram 使用 Opus，Discord 可启用原生语音附件，LINE 使用 MP3，钉钉／企微以 WAV 文件交付。媒体配置按渠道核对。
+Linux 可配置 `DOT_BRIDGE_SPEECH_SYNTHESIS=local-espeak`、`DOT_BRIDGE_SPEECH_VOICE=zh`，复用受保护音频 guard 与共享锁。管理员安装 `/usr/bin/espeak-ng`、FFmpeg、prlimit、flock。`check_<channel>_speech` 返回实际本地准备状态，`reply_<channel>_speech` 接收最多 2000 字符、120 秒的回答并保存完整文字。QQ／微信使用原生语音，飞书／Telegram 使用 Opus，Discord 可启用原生语音附件，LINE 使用最长 60 秒的 M4A，钉钉／企微以 WAV 文件交付。媒体配置按渠道核对。
 
 鉴权后的本机 `/runtime` 返回运行源码 SHA、版本及工具和事件目录指纹。Git 源码归档展开 `source-revision.txt`，组件包携带该来源文件。管理端核对运行与安装目录，原 dot 已加载的插件目录另在原插件中刷新。
 

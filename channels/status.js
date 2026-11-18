@@ -48,6 +48,17 @@ export function connectionStatus({gatewayConnected,callbackHosts,subscription,di
 }
 
 const schema=(properties,required=Object.keys(properties))=>({type:'object',properties,required,additionalProperties:false});
+const callbackStates=['pending','processing','delivered','uncertain','cancelled','expired','dead'];
+const replyStates=['none','pending','processing','sent','uncertain','cancelled','expired','dead'];
+const workSchema=count=>schema({pending:count,processing:count,uncertain:count});
+export function deliveryActivity(latest, rows, {heldReplies=0, retained={callbacks:0,replies:0}}={}) {
+  const callbacks={pending:0,processing:0,uncertain:0};
+  for(const row of rows)if(Object.hasOwn(callbacks,row.state))callbacks[row.state]=row.n;
+  return {callbacks,held_replies:heldReplies,retained_uncertain:{callbacks:retained.callbacks,replies:retained.replies},latest:latest?{
+    received_at:new Date(latest.received_at).toISOString(),
+    callback_state:latest.callback_state,reply_state:latest.reply_state,reply_submitted:Boolean(latest.reply_submitted),
+  }:null};
+}
 export function runtimeStatusProperties() {
   const bool={type:'boolean'},count={type:'integer',minimum:0};
   const diagnostic=schema({at:{type:'string',format:'date-time'},stage:{type:'string',enum:diagnosticStages},code:{type:['integer','null']},reason:{type:'string',enum:diagnosticReasons},hostname:{type:['string','null'],maxLength:253}});
@@ -56,7 +67,10 @@ export function runtimeStatusProperties() {
     subscription_diagnostics:{type:'array',maxItems:5,items:diagnostic},
     subscription_status:schema({state:{type:'string',enum:['none','active','expired','disabled','unknown']},expires_at:{type:['string','null'],format:'date-time'},remaining_seconds:{type:['integer','null'],minimum:0},renewal_owner:{type:'string',const:'host'},diagnostics_available:bool}),
     connection_status:schema({stage:{type:'string',enum:connectionStages},reason:{type:'string',enum:connectionReasons},next_step:{type:'string',enum:connectionNextSteps},callback_hosts_count:{type:'integer',minimum:0,maximum:16},diagnostic_history:{type:'string',enum:['available','unavailable']},callback_hosts_configured:bool,legacy_callback_alias_present:bool,callback_setting_name:{type:'string',enum:['CALLBACK_HOSTS','MCP_CALLBACK_ALLOWED_HOSTS']},wrong_callback_setting_present:bool},['stage','reason','next_step','callback_hosts_count','diagnostic_history']),
-    reply_work:schema({pending:count,processing:count,uncertain:count}),
+    reply_work:workSchema(count),
+    delivery_activity:schema({callbacks:workSchema(count),held_replies:count,retained_uncertain:schema({callbacks:count,replies:count}),
+      latest:{...schema({received_at:{type:'string',format:'date-time'},callback_state:{type:'string',enum:callbackStates},
+        reply_state:{type:'string',enum:replyStates},reply_submitted:bool}),type:['object','null']}}),
     media_limits:schema({read_bytes:{type:'integer',minimum:0,maximum:MAX_MEDIA_BYTES},reply_bytes:{type:'integer',minimum:0,maximum:MAX_MEDIA_BYTES},mcp_body_bytes:{type:'integer',const:MEDIA_RPC_LIMIT},tunnel_envelope_bytes:{type:'integer',const:TUNNEL_ENVELOPE_BYTES}}),
     media_readiness:schema({reply_publisher_configured:bool,reply_publisher_required:bool},['reply_publisher_configured']),
     reply_capabilities:schema({max_text_chars:{type:'integer',minimum:1,maximum:20000},native_text_chars:{type:'integer',minimum:1,maximum:20000},long_reply_mode:{type:'string',enum:['file','chunks','none']}}),

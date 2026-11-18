@@ -1,6 +1,6 @@
 // Read adapter for the established Lark/QQ SQLite layout. Provider repositories
 // keep their existing store/encryption classes; this code never migrates them.
-import {subscriptionDiagnostics,subscriptionStatus,connectionStatus,projectRuntimeStatus} from './status.js';
+import {subscriptionDiagnostics,subscriptionStatus,connectionStatus,projectRuntimeStatus,deliveryActivity} from './status.js';
 import {MAX_MEDIA_BYTES,MEDIA_RPC_LIMIT,TUNNEL_ENVELOPE_BYTES} from './tunnel-budget.js';
 
 const DIAGNOSTIC_KEY='status_subscription_diagnostics_v1';
@@ -71,6 +71,13 @@ export function inspectLegacyRuntimeStatus(store,{principal,now,callbackHosts,bi
   }
   const result={subscription_active:subscription.state==='active'&&allowed,subscription_status:subscription,subscription_diagnostics:diagnostics,reply_work:replyWork,
     media_limits:{read_bytes:readBytes,reply_bytes:replyBytes,mcp_body_bytes:MEDIA_RPC_LIMIT,tunnel_envelope_bytes:TUNNEL_ENVELOPE_BYTES}};
+  const latest=store.get(`SELECT m.received AS received_at,e.state AS callback_state,coalesce(r.state,'none') AS reply_state,
+    r.id IS NOT NULL AS reply_submitted FROM messages m JOIN jobs e ON e.message_id=m.id AND e.kind='event'
+    LEFT JOIN jobs r ON r.message_id=m.id AND r.kind='reply'
+    WHERE m.principal=? AND e.state<>'batched' ORDER BY m.received DESC,m.rowid DESC LIMIT 1`,principal);
+  const callbackWork=store.all(`SELECT e.state,count(*) AS n FROM jobs e JOIN messages m ON m.id=e.message_id
+    WHERE m.principal=? AND e.kind='event' AND e.state IN ('pending','processing','uncertain') GROUP BY e.state`,principal);
+  result.delivery_activity=deliveryActivity(latest,callbackWork);
   if(typeof bindingReady==='boolean')result.binding_ready=bindingReady;
   if(typeof gatewayConnected==='boolean'){
     result.gateway_connected=gatewayConnected;
